@@ -17,7 +17,11 @@
  */
 package org.apache.phoenix.queryserver.server;
 
+import com.codahale.metrics.MetricRegistry;
+import com.codahale.metrics.Slf4jReporter;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Optional;
+
 import org.apache.calcite.avatica.Meta;
 import org.apache.calcite.avatica.remote.Driver;
 import org.apache.calcite.avatica.remote.LocalService;
@@ -37,6 +41,7 @@ import org.apache.hadoop.util.ToolRunner;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
 import org.eclipse.jetty.server.Handler;
+import org.slf4j.LoggerFactory;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
@@ -179,9 +184,16 @@ public final class Main extends Configured implements Tool, Runnable {
       PhoenixMetaFactory factory =
           factoryClass.getDeclaredConstructor(Configuration.class).newInstance(getConf());
       Meta meta = factory.create(Arrays.asList(args));
+      final MetricRegistry metrics = new MetricRegistry();
+      final Slf4jReporter reporter = Slf4jReporter.forRegistry(metrics)
+          .outputTo(LoggerFactory.getLogger("PhoenixQueryServer.Metrics"))
+          .convertRatesTo(TimeUnit.SECONDS)
+          .convertDurationsTo(TimeUnit.MILLISECONDS)
+          .build();
+      reporter.start(10, TimeUnit.SECONDS);
       final HandlerFactory handlerFactory = new HandlerFactory();
       Service service = new LocalService(meta);
-      server = new HttpServer(port, getHandler(getConf(), service, handlerFactory));
+      server = new HttpServer(port, getHandler(getConf(), service, handlerFactory, metrics));
       server.start();
       runningLatch.countDown();
       server.join();
@@ -201,7 +213,8 @@ public final class Main extends Configured implements Tool, Runnable {
    * @param handlerFactory Factory used for creating a Handler
    * @return The Handler to use based on the configuration.
    */
-  Handler getHandler(Configuration conf, Service service, HandlerFactory handlerFactory) {
+  Handler getHandler(Configuration conf, Service service, HandlerFactory handlerFactory,
+      MetricRegistry metrics) {
     String serializationName = conf.get(QueryServices.QUERY_SERVER_SERIALIZATION_ATTRIB,
         QueryServicesOptions.DEFAULT_QUERY_SERVER_SERIALIZATION);
 
@@ -214,7 +227,7 @@ public final class Main extends Configured implements Tool, Runnable {
       throw e;
     }
 
-    Handler handler = handlerFactory.getHandler(service, serialization);
+    Handler handler = handlerFactory.getHandler(service, serialization, Optional.of(metrics));
 
     LOG.info("Instantiated " + handler.getClass() + " for QueryServer");
 

@@ -46,6 +46,7 @@
         <include>org.apache.phoenix:phoenix-server</include>
         <include>org.apache.phoenix:phoenix-server-client</include>
         <include>org.apache.calcite:*</include>
+        <include>io.dropwizard.metrics:metrics-core</include>
       </includes>
     </dependencySet>
   </dependencySets>
