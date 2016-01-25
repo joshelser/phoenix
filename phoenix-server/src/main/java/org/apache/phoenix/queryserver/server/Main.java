@@ -34,6 +34,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.util.Strings;
+import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.util.Tool;
@@ -184,13 +185,22 @@ public final class Main extends Configured implements Tool, Runnable {
       PhoenixMetaFactory factory =
           factoryClass.getDeclaredConstructor(Configuration.class).newInstance(getConf());
       Meta meta = factory.create(Arrays.asList(args));
+
       final MetricRegistry metrics = new MetricRegistry();
-      final Slf4jReporter reporter = Slf4jReporter.forRegistry(metrics)
+      // Logging reporter
+      final Slf4jReporter slf4jReporter = Slf4jReporter.forRegistry(metrics)
           .outputTo(LoggerFactory.getLogger("PhoenixQueryServer.Metrics"))
           .convertRatesTo(TimeUnit.SECONDS)
           .convertDurationsTo(TimeUnit.MILLISECONDS)
           .build();
-      reporter.start(10, TimeUnit.SECONDS);
+      // Metrics2 reporter
+      final HadoopMetrics2Reporter metrics2Reporter = HadoopMetrics2Reporter.forRegistry(metrics)
+          .build(DefaultMetricsSystem.initialize("Phoenix"), "QueryServer", "Phoenix Query Server", "General", "PQS");
+
+      // Start the reporters
+      slf4jReporter.start(30, TimeUnit.SECONDS);
+      metrics2Reporter.start(30, TimeUnit.MILLISECONDS);
+
       final HandlerFactory handlerFactory = new HandlerFactory();
       Service service = new LocalService(meta);
       server = new HttpServer(port, getHandler(getConf(), service, handlerFactory, metrics));
