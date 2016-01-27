@@ -17,6 +17,8 @@
  */
 package org.apache.phoenix.queryserver.server;
 
+import com.codahale.metrics.MetricRegistry;
+import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import org.apache.calcite.avatica.Meta;
 import org.apache.calcite.avatica.jdbc.JdbcMeta;
@@ -40,7 +42,7 @@ import java.util.Properties;
 /**
  * Bridge between Phoenix and Avatica.
  */
-public class PhoenixMetaFactoryImpl extends Configured implements PhoenixMetaFactory {
+public class PhoenixMetaFactoryImpl extends ConfiguredWithMetrics implements PhoenixMetaFactory {
 
   // invoked via reflection
   public PhoenixMetaFactoryImpl() {
@@ -52,11 +54,20 @@ public class PhoenixMetaFactoryImpl extends Configured implements PhoenixMetaFac
     super(conf);
   }
 
+  public PhoenixMetaFactoryImpl(Configuration conf, MetricRegistry metrics) {
+    super(conf, metrics);
+  }
+
   @Override
   public Meta create(List<String> args) {
     Configuration conf = Preconditions.checkNotNull(getConf(), "Configuration must not be null.");
     Properties info = new Properties();
     info.putAll(conf.getValByRegex("avatica.*"));
+    // Get the metrics passed through (if set)
+    Optional<MetricRegistry> metrics = Optional.absent();
+    if (hasMetrics()) {
+      metrics = Optional.of(getMetrics());
+    }
     try {
       final String url;
       if (args.size() == 0) {
@@ -68,7 +79,7 @@ public class PhoenixMetaFactoryImpl extends Configured implements PhoenixMetaFac
             "0 or 1 argument expected. Received " + Arrays.toString(args.toArray()));
       }
       // TODO: what about -D configs passed in from cli? How do they get pushed down?
-      return new JdbcMeta(url, info);
+      return new JdbcMeta(url, info, metrics);
     } catch (SQLException | ClassNotFoundException e) {
       throw new RuntimeException(e);
     }

@@ -177,14 +177,6 @@ public final class Main extends Configured implements Tool, Runnable {
             QueryServices.QUERY_SERVER_KERBEROS_PRINCIPAL_ATTRIB, hostname);
         LOG.info("Login successful.");
       }
-      Class<? extends PhoenixMetaFactory> factoryClass = getConf().getClass(
-          QueryServices.QUERY_SERVER_META_FACTORY_ATTRIB, PhoenixMetaFactoryImpl.class, PhoenixMetaFactory.class);
-      int port = getConf().getInt(QueryServices.QUERY_SERVER_HTTP_PORT_ATTRIB,
-          QueryServicesOptions.DEFAULT_QUERY_SERVER_HTTP_PORT);
-      LOG.debug("Listening on port " + port);
-      PhoenixMetaFactory factory =
-          factoryClass.getDeclaredConstructor(Configuration.class).newInstance(getConf());
-      Meta meta = factory.create(Arrays.asList(args));
 
       final MetricRegistry metrics = new MetricRegistry();
       // Logging reporter
@@ -198,8 +190,18 @@ public final class Main extends Configured implements Tool, Runnable {
           .build(DefaultMetricsSystem.initialize("Phoenix"), "QueryServer", "Phoenix Query Server", "General", "PQS");
 
       // Start the reporters
-      slf4jReporter.start(30, TimeUnit.SECONDS);
-      metrics2Reporter.start(30, TimeUnit.MILLISECONDS);
+      slf4jReporter.start(10, TimeUnit.SECONDS);
+      metrics2Reporter.start(10, TimeUnit.SECONDS);
+
+      Class<? extends PhoenixMetaFactory> factoryClass = getConf().getClass(
+          QueryServices.QUERY_SERVER_META_FACTORY_ATTRIB, PhoenixMetaFactoryImpl.class, PhoenixMetaFactory.class);
+      int port = getConf().getInt(QueryServices.QUERY_SERVER_HTTP_PORT_ATTRIB,
+          QueryServicesOptions.DEFAULT_QUERY_SERVER_HTTP_PORT);
+      LOG.debug("Listening on port " + port);
+      PhoenixMetaFactory factory =
+          factoryClass.getDeclaredConstructor(Configuration.class, MetricRegistry.class)
+          .newInstance(getConf(), metrics);
+      Meta meta = factory.create(Arrays.asList(args));
 
       final HandlerFactory handlerFactory = new HandlerFactory();
       Service service = new LocalService(meta);
