@@ -90,7 +90,10 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NavigableMap;
+import java.util.Objects;
 import java.util.Properties;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
@@ -188,6 +191,7 @@ import org.apache.phoenix.schema.PIndexState;
 import org.apache.phoenix.schema.PMetaDataEntity;
 import org.apache.phoenix.schema.PName;
 import org.apache.phoenix.schema.PNameFactory;
+import org.apache.phoenix.schema.PNameImpl;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.IndexType;
 import org.apache.phoenix.schema.PTable.LinkType;
@@ -435,6 +439,7 @@ public class MetaDataEndpointImpl extends MetaDataProtocol implements Coprocesso
     }
 
     private RegionCoprocessorEnvironment env;
+    private Timer statsUpdateTimer;
 
     /**
      * Stores a reference to the coprocessor environment provided by the
@@ -457,11 +462,18 @@ public class MetaDataEndpointImpl extends MetaDataProtocol implements Coprocesso
         // Start the phoenix trace collection
         Tracing.addTraceMetricsSource();
         Metrics.ensureConfigured();
+        this.statsUpdateTimer = new Timer("Phoenix Background Stats Updater", true);
+        long statsUpdateDelay = 10l;
+        long statsUpdatePeriod = 100l;
+        statsUpdateTimer.scheduleAtFixedRate(new StatsUpdateTask(this.env), statsUpdateDelay,
+            statsUpdatePeriod);
     }
 
     @Override
     public void stop(CoprocessorEnvironment env) throws IOException {
-        // nothing to do
+        if (null != this.statsUpdateTimer) {
+            this.statsUpdateTimer.cancel();
+        }
     }
 
     @Override
@@ -956,18 +968,9 @@ public class MetaDataEndpointImpl extends MetaDataProtocol implements Coprocesso
                 .getNameAsString()) : physicalTables.get(0);
         PTableStats stats = PTableStats.EMPTY_STATS;
         if (tenantId == null) {
-            HTableInterface statsHTable = null;
-            try {
-                statsHTable = ServerUtil.getHTableForCoprocessorScan(env,
-                        SchemaUtil.getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES, env.getConfiguration())
-                                .getName());
-                stats = StatisticsUtil.readStatistics(statsHTable, physicalTableName.getBytes(), clientTimeStamp);
-                timeStamp = Math.max(timeStamp, stats.getTimestamp());
-            } catch (org.apache.hadoop.hbase.TableNotFoundException e) {
-                logger.warn(SchemaUtil.getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES,
-                        env.getConfiguration()) + " not online yet?");
-            } finally {
-                if (statsHTable != null) statsHTable.close();
+            PTableStats cachedStats = GlobalCache.getInstance(env).getTableStatsCache().getIfPresent(physicalTableName);
+            if (null != cachedStats) {
+                stats = cachedStats;
             }
         }
         return PTableImpl.makePTable(tenantId, schemaName, tableName, tableType, indexState, timeStamp, tableSeqNum,
@@ -3834,5 +3837,105 @@ public class MetaDataEndpointImpl extends MetaDataProtocol implements Coprocesso
         return new MetaDataMutationResult(MutationCode.SCHEMA_NOT_FOUND, EnvironmentEdgeManager.currentTimeMillis(),
                 null);
 
+    }
+
+    /**
+     * A task that runs at a certain interval whose purpose is to maintain a cached copy of the
+     * statistics for Phoenix tables.
+     */
+    protected static class StatsUpdateTask extends TimerTask {
+        private static final Logger statsTaskLogger = LoggerFactory.getLogger(StatsUpdateTask.class);
+
+        // TODO Clients might see a view over stats which is newer than they are actually
+        // reading (with their CurrentSCN setting)
+        private static final long MAX_TIMESTAMP = Long.MAX_VALUE;
+        private final RegionCoprocessorEnvironment env;
+
+        public StatsUpdateTask(RegionCoprocessorEnvironment env) {
+            this.env = Objects.requireNonNull(env);
+        }
+
+        @Override
+        public void run() {
+            HTableInterface statsHTable = null;
+            PhoenixConnection conn = null;
+            try {
+                Cache<PName,PTableStats> tableStatsCache = GlobalCache.getInstance(env).getTableStatsCache();
+                statsHTable = ServerUtil.getHTableForCoprocessorScan(env, PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES);
+                conn = QueryUtil.getConnection(env.getConfiguration()).unwrap(PhoenixConnection.class);
+
+                // Find all of the Phoenix tables present
+                final ResultSet results = conn.getMetaData().getTables(null, null, null, null);
+                if (null == results) {
+                  return;
+                }
+
+                while (results.next()) {
+                    byte[] tableName = results.getBytes(PhoenixDatabaseMetaData.TABLE_NAME);
+
+                    if (!shouldCollectStatsForTable(tableName)) {
+                      statsTaskLogger.debug("Ignoring stats collection on table {}", tableName);
+                    }
+
+                    // Try to read the statistics for each table
+                    PTableStats statsForTable = StatisticsUtil.readStatistics(statsHTable, tableName, MAX_TIMESTAMP);
+                    if (null != statsForTable) {
+                        // Cache the stats if we found some. We don't care about the concurrency
+                        // of this update as it's just statistics (not affecting correctness) of
+                        // a query. If a client misses the stats or gets an older copy, it's fine.
+                        tableStatsCache.put(PNameFactory.newName(tableName), statsForTable);
+                    }
+                }
+            } catch (org.apache.hadoop.hbase.TableNotFoundException e) {
+              // No stats, then nothing to do
+              statsTaskLogger.warn(PhoenixDatabaseMetaData.SYSTEM_STATS_NAME + " not online yet?");
+              return;
+            } catch (Exception e) {
+              statsTaskLogger.warn("Failed to update table stats cache, will retry", e);
+            } finally {
+                // Ensure the Phoenix connection is closed
+                if (null != conn) {
+                    try {
+                        conn.close();
+                    } catch (SQLException e) {
+                        statsTaskLogger.warn("Failed to close Phoenix Connection", e);
+                    }
+                }
+
+                // Ensure the HTable for the stats table is closed
+                if (null != statsHTable) {
+                    try {
+                        statsHTable.close();
+                    } catch (IOException e) {
+                        statsTaskLogger.warn("Failed to close statistics HTable instance", e);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Determines if the statistics should be collected for the Phoenix table with the given name.
+         *
+         * @param tableName The name of a Phoenix table
+         * @return True if stats should be collected, false otherwise.
+         */
+        protected boolean shouldCollectStatsForTable(byte[] tableName) {
+            for (int i = 0; i < PhoenixDatabaseMetaData.SYSTEM_SCHEMA_NAME_BYTES.length && i < tableName.length; i++) {
+              if (PhoenixDatabaseMetaData.SYSTEM_SCHEMA_NAME_BYTES[i] != tableName[i]) {
+                  // Doesn't start with "SYSTEM", we know it's not an internal table
+                  return true;
+              }
+            }
+
+            // Might be a system table or just a table that starts with the word "system"
+            if (PhoenixDatabaseMetaData.SYSTEM_SCHEMA_NAME_BYTES.length < tableName.length) {
+                // If the next byte isn't a period, it's not one of the Phoenix system tables
+                // e.g. 'SYSTEM.STATS' as opposed to 'SYSTEMLOGINFORMATION' or 'SYSTEMNS.FOO'
+                return QueryConstants.NAME_SEPARATOR_BYTE != tableName[PhoenixDatabaseMetaData.SYSTEM_SCHEMA_NAME_BYTES.length];
+            }
+
+            // Shorter in length than 'SYSTEM.', so collect stats for it.
+            return true;
+        }
     }
 }

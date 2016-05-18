@@ -37,6 +37,8 @@ import org.apache.phoenix.memory.GlobalMemoryManager;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
 import org.apache.phoenix.schema.PMetaDataEntity;
+import org.apache.phoenix.schema.PName;
+import org.apache.phoenix.schema.stats.PTableStats;
 import org.apache.phoenix.util.SizedUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +65,8 @@ public class GlobalCache extends TenantCacheImpl {
     private final ConcurrentMap<ImmutableBytesWritable,TenantCache> perTenantCacheMap = new ConcurrentHashMap<ImmutableBytesWritable,TenantCache>();
     // Cache for lastest PTable for a given Phoenix table
     private volatile Cache<ImmutableBytesPtr,PMetaDataEntity> metaDataCache;
+    // Cache of the stats for each Phoenix table
+    private Cache<PName,PTableStats> tableStatsCache;
     
     public long clearTenantCache() {
         long unfreedBytes = getMemoryManager().getMaxMemory() - getMemoryManager().getAvailableMemory();
@@ -93,11 +97,9 @@ public class GlobalCache extends TenantCacheImpl {
             synchronized(this) {
                 result = metaDataCache;
                 if(result == null) {
-                    long maxTTL = Math.min(config.getLong(
+                    long maxTTL = config.getLong(
                             QueryServices.MAX_SERVER_METADATA_CACHE_TIME_TO_LIVE_MS_ATTRIB,
-                            QueryServicesOptions.DEFAULT_MAX_SERVER_METADATA_CACHE_TIME_TO_LIVE_MS), config.getLong(
-                            QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
-                            QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS));
+                            QueryServicesOptions.DEFAULT_MAX_SERVER_METADATA_CACHE_TIME_TO_LIVE_MS);
                     long maxSize = config.getLong(QueryServices.MAX_SERVER_METADATA_CACHE_SIZE_ATTRIB,
                             QueryServicesOptions.DEFAULT_MAX_SERVER_METADATA_CACHE_SIZE);
                     metaDataCache = result = CacheBuilder.newBuilder()
@@ -110,6 +112,33 @@ public class GlobalCache extends TenantCacheImpl {
                                 }
                             })
                             .build();
+                }
+            }
+        }
+        return result;
+    }
+
+    public Cache<PName,PTableStats> getTableStatsCache() {
+        Cache<PName,PTableStats> result = this.tableStatsCache;
+        if (null == result) {
+            synchronized (this) {
+                if (null == result) {
+                    long maxTTL = config.getLong(
+                        QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
+                        QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS);
+                    long maxSize = config.getLong(
+                        QueryServices.STATS_CACHE_MAX_SIZE_ATTRIB,
+                        QueryServicesOptions.DEFAULT_STATS_CACHE_MAX_SIZE);
+                    tableStatsCache = result = CacheBuilder.newBuilder()
+                        .maximumWeight(maxSize)
+                        .expireAfterAccess(maxTTL, TimeUnit.MILLISECONDS)
+                        .weigher(new Weigher<PName, PTableStats>() {
+                            @Override
+                            public int weigh(PName tableName, PTableStats stats) {
+                                return tableName.getEstimatedSize() + stats.getEstimatedSize();
+                            }
+                        })
+                        .build();
                 }
             }
         }

@@ -189,6 +189,7 @@ public class QueryServicesOptions {
     public static final boolean DEFAULT_RUN_UPDATE_STATS_ASYNC = true;
     public static final boolean DEFAULT_COMMIT_STATS_ASYNC = true;
     public static final int DEFAULT_STATS_POOL_SIZE = 4;
+    public static final long DEFAULT_STATS_CACHE_MAX_SIZE = 50 * 1024 * 1024;
 
     public static final boolean DEFAULT_USE_REVERSE_SCAN = true;
 
