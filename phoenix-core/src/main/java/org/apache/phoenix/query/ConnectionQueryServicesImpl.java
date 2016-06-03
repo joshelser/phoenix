@@ -31,18 +31,23 @@ import static org.apache.phoenix.util.UpgradeUtil.upgradeTo4_5_0;
 
 import java.io.IOException;
 import java.lang.ref.WeakReference;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
@@ -205,6 +210,9 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Throwables;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.RemovalCause;
+import com.google.common.cache.RemovalListener;
+import com.google.common.cache.RemovalNotification;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -262,6 +270,8 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     private final List<LinkedBlockingQueue<WeakReference<PhoenixConnection>>> connectionQueues;
     private ScheduledExecutorService renewLeaseExecutor;
     private final boolean renewLeaseEnabled;
+
+    private final Timer statsRefreshTask;
 
     private static interface FeatureSupported {
         boolean isSupported(ConnectionQueryServices services);
@@ -333,6 +343,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         tableStatsCache = CacheBuilder.newBuilder()
                 .maximumSize(MAX_TABLE_STATS_CACHE_ENTRIES)
                 .expireAfterWrite(halfStatsUpdateFreq, TimeUnit.MILLISECONDS)
+                .removalListener(new PhoenixStatsCacheRemovalListener())
                 .build();
         this.returnSequenceValues = props.getBoolean(QueryServices.RETURN_SEQUENCE_VALUES_ATTRIB, QueryServicesOptions.DEFAULT_RETURN_SEQUENCE_VALUES);
         this.renewLeaseEnabled = config.getBoolean(RENEW_LEASE_ENABLED, DEFAULT_RENEW_LEASE_ENABLED);
@@ -345,6 +356,171 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
             list.add(queue);
         }
         connectionQueues = ImmutableList.copyOf(list);
+        this.statsRefreshTask = createAndStartStatsRefreshTimer();
+    }
+
+    /**
+     * Creates and schedules the first invocation of a task on a {@link Timer}.
+     */
+    private Timer createAndStartStatsRefreshTimer()  {
+        try {
+            // Create a well-named, daemon timer for refreshing stats
+            Timer timer = new Timer("Phoenix Stats Refresh Task", true);
+            // Start the first run after a short delay (prevent any thundering herd)
+            int delta = new Random().nextInt(5);
+            timer.schedule(createStatsRefreshTask(timer), 3000 + (100 * delta));
+            return timer;
+        } catch (Exception e) {
+            throw new RuntimeException("Unable to create Phoenix stats refresh timer", e);
+        }
+    }
+
+    /**
+     * Creates the {@link TimerTask} which performs the stats refreshing.
+     */
+    private TimerTask createStatsRefreshTask(Timer timer) {
+        return new PhoenixStatsRefreshTask(this, timer);
+    }
+
+    /**
+     * Returns the amount of time to wait between stats refreshes.
+     */
+    long getStatsRefreshPeriod() {
+        return config.getLong(
+            QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
+            QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS);
+    }
+
+    /**
+     * A {@link TimerTask} that asynchronously reads and caches Phoenix table statistics.
+     */
+    static class PhoenixStatsRefreshTask extends TimerTask {
+        private static final Logger statsRefreshLogger = LoggerFactory.getLogger(PhoenixStatsRefreshTask.class);
+
+        private final ConnectionQueryServicesImpl queryServices;
+        private final Timer timer;
+
+        public PhoenixStatsRefreshTask(ConnectionQueryServicesImpl queryServices, Timer timer) {
+            this.queryServices = Objects.requireNonNull(queryServices);
+            this.timer = Objects.requireNonNull(timer);
+        }
+
+        @SuppressWarnings("deprecation")
+        public void run() {
+            try {
+                final HTableInterface statsHTable;
+                try {
+                    statsHTable = getStatsTable();
+                } catch (IOException e) {
+                    statsRefreshLogger.debug("Cannot get Phoenix SYSTEM.STATS table. Maybe it doesn't exist yet", e);
+                    return;
+                }
+
+                for (PTable table : getPhoenixTables()) {
+                    byte[] tableName = table.getName().getBytes();
+                    try {
+                        // TODO Do we care about potentially inaccurate stats per the currentSCN?
+                        PTableStats tableStats = readStatistics(statsHTable, tableName, Long.MAX_VALUE);
+                        // Log a trace message to help track insight into stats collection
+                        traceStatsUpdate(tableName, tableStats);
+                        // Only loads the stats when they are successfully returned
+                        cacheTableStats(tableName, tableStats);
+                    } catch (IOException e) {
+                        statsRefreshLogger.debug("Failed to fetch table stats for {}", table.getName(), e);
+                    }
+                }
+            } catch (Exception e) {
+                // Outer catch to make sure we don't bork the timer with an uncaught exception
+                statsRefreshLogger.debug("Failed to update Phoenix table statistics", e);
+            } finally {
+                // Always requeue the task to be run again by the timer
+                requeueTask();
+            }
+        }
+
+        /**
+         * Returns the HBase reference to the Phoenix Stats table.
+         */
+        @SuppressWarnings("deprecation")
+        HTableInterface getStatsTable() throws IOException {
+            return queryServices.connection.getTable(PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES);
+        }
+
+        /**
+         * Returns a list of all Phoenix tables.
+         */
+        Iterable<PTable> getPhoenixTables() {
+            PMetaData metadata = queryServices.latestMetaData;
+            if (metadata == null) {
+                queryServices.throwConnectionClosedException();
+            }
+            return metadata;
+        }
+
+        /**
+         * Caches the given stats for a Phoenix table name.
+         */
+        void cacheTableStats(byte[] tableName, PTableStats stats) {
+           queryServices.tableStatsCache.put(new ImmutableBytesPtr(tableName), stats);
+        }
+
+        /**
+         * Reads the Phoenix statistics for a given Phoenix table.
+         */
+        @SuppressWarnings("deprecation")
+        PTableStats readStatistics(HTableInterface statsTable, byte[] tableName, long clientTimeStamp) throws IOException {
+            return StatisticsUtil.readStatistics(statsTable, tableName, clientTimeStamp);
+        }
+
+        /**
+         * Returns the timer this task is using.
+         */
+        Timer getTimer() {
+            return this.timer;
+        }
+
+        /**
+         * Returns the QueryServices implementation.
+         */
+        ConnectionQueryServicesImpl getQueryServices() {
+            return this.queryServices;
+        }
+
+        /**
+         * Logs a trace message for newly inserted entries to the stats cache.
+         */
+        void traceStatsUpdate(byte[] tableName, PTableStats stats) {
+            statsRefreshLogger.trace("Updating local TableStats cache for {}, size={}bytes",
+                Bytes.toString(tableName), stats.getEstimatedSize());
+        }
+
+        /**
+         * Schedules this task to be run by the timer again.
+         */
+        void requeueTask() {
+            getTimer().schedule(this, getQueryServices().getStatsRefreshPeriod());
+        }
+    }
+
+    /**
+     * A {@link RemovalListener} implementation to track evictions from the table stats cache.
+     */
+    static class PhoenixStatsCacheRemovalListener implements RemovalListener<ImmutableBytesPtr, PTableStats> {
+        @Override
+        public void onRemoval(RemovalNotification<ImmutableBytesPtr, PTableStats> notification) {
+            final RemovalCause cause = notification.getCause();
+            if (wasEvicted(cause)) {
+                ImmutableBytesPtr ptr = notification.getKey();
+                String tableName = new String(ptr.get(), ptr.getOffset(), ptr.getLength());
+                PhoenixStatsRefreshTask.statsRefreshLogger.trace("Cached stats for {} with size={}bytes was evicted due to cause={}",
+                    new Object[] {tableName, notification.getValue().getEstimatedSize(), cause});
+            }
+        }
+
+        boolean wasEvicted(RemovalCause cause) {
+            // This is actually a method on RemovalCause but isn't exposed
+            return RemovalCause.EXPLICIT != cause && RemovalCause.REPLACED != cause;
+        }
     }
 
     @Override
@@ -461,6 +637,9 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
                 sqlE = e;
             } finally {
                 try {
+                    // Removal any scheduled task to refresh the table stats cache
+                    // The timer is a daemon, so we shouldn't have to do anything else
+                    statsRefreshTask.cancel();
                     childServices.clear();
                     if (renewLeaseExecutor != null) {
                         renewLeaseExecutor.shutdownNow();
@@ -3353,6 +3532,8 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     @Override
     public PTableStats getTableStats(final byte[] physicalName, final long clientTimeStamp) throws SQLException {
         try {
+            // Ideally, the statsRefreshTimer will be automatically keeping tableStatsCache up to date
+            // but the Callable here will make sure clients always get a fresh view.
             return tableStatsCache.get(new ImmutableBytesPtr(physicalName), new Callable<PTableStats>() {
                 @Override
                 public PTableStats call() throws Exception {

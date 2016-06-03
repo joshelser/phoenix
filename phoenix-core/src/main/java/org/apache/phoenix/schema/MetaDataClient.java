@@ -3583,24 +3583,22 @@ public class MetaDataClient {
         String physicalName = table.getPhysicalName().toString().replace(QueryConstants.NAMESPACE_SEPARATOR,
                 QueryConstants.NAME_SEPARATOR);
         if (isView && table.getViewType() != ViewType.MAPPED) {
-            try {
-                return connection.getTable(new PTableKey(null, physicalName)).getTableStats();
-            } catch (TableNotFoundException e) {
-                // Possible when the table timestamp == current timestamp - 1.
-                // This would be most likely during the initial index build of a view index
-                // where we're doing an upsert select from the tenant specific table.
-                // TODO: would we want to always load the physical table in updateCache in
-                // this case too, as we might not update the view with all of it's indexes?
-                String physicalSchemaName = SchemaUtil.getSchemaNameFromFullName(physicalName);
-                String physicalTableName = SchemaUtil.getTableNameFromFullName(physicalName);
-                MetaDataMutationResult result = updateCache(null, physicalSchemaName, physicalTableName, false);
-                if (result.getTable() == null) {
-                    throw new TableNotFoundException(physicalSchemaName, physicalTableName);
-                }
-                return result.getTable().getTableStats();
-            }
+              PTableStats stats = connection.getQueryServices().getTableStats(Bytes.toBytes(physicalName), getCurrentScn());
+              // Reference check -- we might not have gotten any stats. This is what will happen if we fail to acquire stats
+              if (PTableStats.EMPTY_STATS == stats) {
+                  // Possible when the table timestamp == current timestamp - 1.
+                  // This would be most likely during the initial index build of a view index
+                  // where we're doing an upsert select from the tenant specific table.
+                  // TODO: would we want to always load the physical table in updateCache in
+                  // this case too, as we might not update the view with all of it's indexes?
+                  byte[] physicalSchemaName = Bytes.toBytes(SchemaUtil.getSchemaNameFromFullName(physicalName));
+                  byte[] physicalTableName = Bytes.toBytes(SchemaUtil.getTableNameFromFullName(physicalName));
+                  connection.getQueryServices().clearTableFromCache(null, physicalSchemaName, physicalTableName, getCurrentScn());
+                  stats = connection.getQueryServices().getTableStats(Bytes.toBytes(physicalName), getCurrentScn());
+              }
+              return stats;
         }
-        return table.getTableStats();
+        return connection.getQueryServices().getTableStats(table.getName().getBytes(), getCurrentScn());
     }
 
     private void throwIfLastPKOfParentIsFixedLength(PTable parent, String viewSchemaName, String viewName, ColumnDef col) throws SQLException {
