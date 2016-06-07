@@ -189,6 +189,8 @@ public class QueryServicesOptions {
     public static final boolean DEFAULT_RUN_UPDATE_STATS_ASYNC = true;
     public static final boolean DEFAULT_COMMIT_STATS_ASYNC = true;
     public static final int DEFAULT_STATS_POOL_SIZE = 4;
+    // Max number of cached table stats for view or shared index physical tables
+    public static final int DEFAULT_STATS_MAX_CACHE_ENTRIES = 512;
 
     public static final boolean DEFAULT_USE_REVERSE_SCAN = true;
 

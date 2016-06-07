@@ -225,8 +225,6 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     private static final Logger logger = LoggerFactory.getLogger(ConnectionQueryServicesImpl.class);
     private static final int INITIAL_CHILD_SERVICES_CAPACITY = 100;
     private static final int DEFAULT_OUT_OF_ORDER_MUTATIONS_WAIT_TIME_MS = 1000;
-    // Max number of cached table stats for view or shared index physical tables
-    private static final int MAX_TABLE_STATS_CACHE_ENTRIES = 512;
     protected final Configuration config;
     private final ConnectionInfo connectionInfo;
     // Copy of config.getProps(), but read-only to prevent synchronization that we
@@ -337,12 +335,17 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         // find the HBase version and use that to determine the KeyValueBuilder that should be used
         String hbaseVersion = VersionInfo.getVersion();
         this.kvBuilder = KeyValueBuilder.get(hbaseVersion);
-        long halfStatsUpdateFreq = config.getLong(
+        // Expire table stats cache entries after 
+        final long halfStatsUpdateFreq = config.getLong(
                 QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
                 QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS) / 2;
+        // Maximum number of entries (tables) to store in the cache at one time
+        final long maxTableStatsCacheEntries = config.getLong(
+                QueryServices.STATS_MAX_CACHE_ENTRIES,
+                QueryServicesOptions.DEFAULT_STATS_MAX_CACHE_ENTRIES);
         tableStatsCache = CacheBuilder.newBuilder()
-                .maximumSize(MAX_TABLE_STATS_CACHE_ENTRIES)
-                .expireAfterWrite(halfStatsUpdateFreq, TimeUnit.MILLISECONDS)
+                .maximumSize(maxTableStatsCacheEntries)
+                .expireAfterAccess(halfStatsUpdateFreq, TimeUnit.MILLISECONDS)
                 .removalListener(new PhoenixStatsCacheRemovalListener())
                 .build();
         this.returnSequenceValues = props.getBoolean(QueryServices.RETURN_SEQUENCE_VALUES_ATTRIB, QueryServicesOptions.DEFAULT_RETURN_SEQUENCE_VALUES);
