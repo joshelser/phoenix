@@ -1024,10 +1024,6 @@ public class MetaDataClient {
                         public PName getPhysicalName() {
                             return physicalNames.get(index);
                         }
-                        @Override
-                        public PTableStats getTableStats() {
-                            return PTableStats.EMPTY_STATS;
-                        }
                     };
                     rowCount += updateStatisticsInternal(name, indexLogicalTable, updateStatisticsStmt.getProps());
                 }

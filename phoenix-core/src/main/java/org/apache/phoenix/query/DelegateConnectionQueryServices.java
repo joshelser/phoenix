@@ -341,4 +341,9 @@ public class DelegateConnectionQueryServices extends DelegateQueryServices imple
     public MetaDataMutationResult dropSchema(List<Mutation> schemaMetaData, String schemaName) throws SQLException {
         return getDelegate().dropSchema(schemaMetaData, schemaName);
     }
+
+    @Override
+    public void addTableStats(PTable table, PTableStats stats) {
+        getDelegate().addTableStats(table, stats);
+    }
 }

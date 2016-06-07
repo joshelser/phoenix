@@ -132,4 +132,9 @@ public interface ConnectionQueryServices extends QueryServices, MetaDataMutated 
 
     public MetaDataMutationResult dropSchema(List<Mutation> schemaMetaData, String schemaName) throws SQLException;
 
+    /**
+     * Adds the given {@link PTableStats} for the {@link table} to the local cache.
+     */
+    void addTableStats(PTable table, PTableStats stats);
+
 }

@@ -328,10 +328,6 @@ public interface PTable extends PMetaDataEntity {
     PTableKey getKey();
 
     IndexType getIndexType();
-    /**
-     * @deprecated Use {@link ConnectionQueryServices#getTableStats(byte[], long)}.
-     */
-    PTableStats getTableStats();
     int getBaseColumnCount();
 
     /**

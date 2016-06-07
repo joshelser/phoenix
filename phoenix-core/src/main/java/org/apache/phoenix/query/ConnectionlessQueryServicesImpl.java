@@ -629,4 +629,9 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
     public MetaDataMutationResult dropSchema(List<Mutation> schemaMetaData, String schemaName) {
         return new MetaDataMutationResult(MutationCode.SCHEMA_ALREADY_EXISTS, 0, null);
     }
+
+    @Override
+    public void addTableStats(PTable table, PTableStats stats) {
+        throw new UnsupportedOperationException();
+    }
 }
