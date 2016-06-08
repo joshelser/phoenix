@@ -673,7 +673,7 @@ public class SkipScanBigFilterTest extends BaseConnectionlessQueryTest {
         };
         PhoenixConnection pConn = conn.unwrap(PhoenixConnection.class);
         pConn.addTable(table, System.currentTimeMillis());
-        ((ConnectionQueryServicesImpl) pConn.getQueryServices()).addTableStats(table, stats);
+        pConn.getQueryServices().addTableStats(table, stats);
 
         String query = "SELECT count(1) cnt,\n" + 
                 "       coalesce(SUM(impressions), 0.0) AS \"impressions\",\n" + 

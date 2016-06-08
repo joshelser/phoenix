@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
@@ -112,6 +113,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
     private volatile boolean initialized;
     private volatile SQLException initializationException;
     private final Map<String, List<HRegionLocation>> tableSplits = Maps.newHashMap();
+    private final TableStatsCache tableStatsCache;
     
     public ConnectionlessQueryServicesImpl(QueryServices services, ConnectionInfo connInfo, Properties info) {
         super(services);
@@ -138,6 +140,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
         config = HBaseFactoryProvider.getConfigurationFactory().getConfiguration(config);
         TransactionManager txnManager = new TransactionManager(config);
         this.txSystemClient = new InMemoryTxSystemClient(txnManager);
+        this.tableStatsCache = new TableStatsCache(config);
     }
 
     private PMetaData newEmptyMetaData() {
@@ -516,7 +519,11 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
 
     @Override
     public PTableStats getTableStats(byte[] physicalName, long clientTimeStamp) {
-        return PTableStats.EMPTY_STATS;
+        PTableStats stats = tableStatsCache.getCache().getIfPresent(physicalName);
+        if (null == stats) {
+          return PTableStats.EMPTY_STATS;
+        }
+        return stats;
     }
 
     @Override
@@ -632,6 +639,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
 
     @Override
     public void addTableStats(PTable table, PTableStats stats) {
-        throw new UnsupportedOperationException();
+        tableStatsCache.getCache().put(Objects.requireNonNull(table).getName().getBytesPtr(),
+            Objects.requireNonNull(stats));
     }
 }

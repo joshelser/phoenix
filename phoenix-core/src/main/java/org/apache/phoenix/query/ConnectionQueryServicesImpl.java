@@ -208,9 +208,6 @@ import org.slf4j.LoggerFactory;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.Throwables;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
 import com.google.common.cache.RemovalCause;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
@@ -233,7 +230,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     private final ReadOnlyProps props;
     private final String userName;
     private final ConcurrentHashMap<ImmutableBytesWritable,ConnectionQueryServices> childServices;
-    private final Cache<ImmutableBytesPtr, PTableStats> tableStatsCache;
+    private final TableStatsCache tableStatsCache;
 
     // Cache the latest meta data here for future connections
     // writes guarded by "latestMetaDataLock"
@@ -334,19 +331,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         // find the HBase version and use that to determine the KeyValueBuilder that should be used
         String hbaseVersion = VersionInfo.getVersion();
         this.kvBuilder = KeyValueBuilder.get(hbaseVersion);
-        // Expire table stats cache entries after 
-        final long halfStatsUpdateFreq = config.getLong(
-                QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
-                QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS) / 2;
-        // Maximum number of entries (tables) to store in the cache at one time
-        final long maxTableStatsCacheEntries = config.getLong(
-                QueryServices.STATS_MAX_CACHE_ENTRIES,
-                QueryServicesOptions.DEFAULT_STATS_MAX_CACHE_ENTRIES);
-        tableStatsCache = CacheBuilder.newBuilder()
-                .maximumSize(maxTableStatsCacheEntries)
-                .expireAfterAccess(halfStatsUpdateFreq, TimeUnit.MILLISECONDS)
-                .removalListener(new PhoenixStatsCacheRemovalListener())
-                .build();
+        this.tableStatsCache = new TableStatsCache(config);
         this.returnSequenceValues = props.getBoolean(QueryServices.RETURN_SEQUENCE_VALUES_ATTRIB, QueryServicesOptions.DEFAULT_RETURN_SEQUENCE_VALUES);
         this.renewLeaseEnabled = config.getBoolean(RENEW_LEASE_ENABLED, DEFAULT_RENEW_LEASE_ENABLED);
         this.renewLeasePoolSize = config.getInt(RENEW_LEASE_THREAD_POOL_SIZE, DEFAULT_RENEW_LEASE_THREAD_POOL_SIZE);
@@ -358,28 +343,6 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
             list.add(queue);
         }
         connectionQueues = ImmutableList.copyOf(list);
-    }
-
-    /**
-     * A {@link RemovalListener} implementation to track evictions from the table stats cache.
-     */
-    static class PhoenixStatsCacheRemovalListener implements
-            RemovalListener<ImmutableBytesPtr, PTableStats> {
-        @Override
-        public void onRemoval(RemovalNotification<ImmutableBytesPtr, PTableStats> notification) {
-            final RemovalCause cause = notification.getCause();
-            if (wasEvicted(cause)) {
-                ImmutableBytesPtr ptr = notification.getKey();
-                String tableName = new String(ptr.get(), ptr.getOffset(), ptr.getLength());
-                logger.trace("Cached stats for {} with size={}bytes was evicted due to cause={}",
-                    new Object[] {tableName, notification.getValue().getEstimatedSize(), cause});
-            }
-        }
-
-        boolean wasEvicted(RemovalCause cause) {
-            // This is actually a method on RemovalCause but isn't exposed
-            return RemovalCause.EXPLICIT != cause && RemovalCause.REPLACED != cause;
-        }
     }
 
     @Override
@@ -3429,8 +3392,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
 
     @Override
     public void addTableStats(PTable table, PTableStats stats) {
-        this.tableStatsCache.put(Objects.requireNonNull(table).getName().getBytesPtr(),
-            Objects.requireNonNull(stats));
+        this.tableStatsCache.put(table, stats);
     }
 
     /**
