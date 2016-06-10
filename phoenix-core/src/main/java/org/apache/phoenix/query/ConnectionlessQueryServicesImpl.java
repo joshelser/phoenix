@@ -140,7 +140,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
         config = HBaseFactoryProvider.getConfigurationFactory().getConfiguration(config);
         TransactionManager txnManager = new TransactionManager(config);
         this.txSystemClient = new InMemoryTxSystemClient(txnManager);
-        this.tableStatsCache = new TableStatsCache(config);
+        this.tableStatsCache = new TableStatsCache(this, config);
     }
 
     private PMetaData newEmptyMetaData() {

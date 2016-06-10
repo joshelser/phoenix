@@ -28,7 +28,7 @@ import com.google.common.cache.RemovalCause;
  * Test class around the PhoenixStatsCacheRemovalListener.
  */
 public class PhoenixStatsCacheRemovalListenerTest {
-  
+
     @Test
     public void nonEvictionsAreIgnored() {
         // We don't care so much about cases where we trigger a removal or update of the stats
@@ -41,5 +41,5 @@ public class PhoenixStatsCacheRemovalListenerTest {
         assertTrue(listener.wasEvicted(RemovalCause.COLLECTED));
         assertTrue(listener.wasEvicted(RemovalCause.EXPIRED));
         assertTrue(listener.wasEvicted(RemovalCause.SIZE));
-    }  
+    }
 }

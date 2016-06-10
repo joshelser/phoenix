@@ -16,23 +16,30 @@
  */
 package org.apache.phoenix.query;
 
+import java.io.IOException;
 import java.util.Objects;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.client.HTableInterface;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
+import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.stats.PTableStats;
+import org.apache.phoenix.schema.stats.StatisticsUtil;
+import org.apache.phoenix.util.SchemaUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import com.google.common.cache.RemovalCause;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
+import com.google.common.cache.Weigher;
 
 /**
  * "Client-side" cache for storing {@link PTableStats} for Phoenix tables. Intended to decouple
@@ -41,29 +48,87 @@ import com.google.common.cache.RemovalNotification;
 public class TableStatsCache {
     private static final Logger logger = LoggerFactory.getLogger(TableStatsCache.class);
 
-    private final Cache<ImmutableBytesPtr, PTableStats> cache;
+    private final ConnectionQueryServices queryServices;
+    private final LoadingCache<ImmutableBytesPtr, PTableStats> cache;
 
-    public TableStatsCache(Configuration config) {
-      // Expire table stats cache entries after 
-        final long halfStatsUpdateFreq = config.getLong(
+    public TableStatsCache(ConnectionQueryServices queryServices, Configuration config) {
+        this.queryServices = Objects.requireNonNull(queryServices);
+        // Expire table stats cache entries after
+        final long statsUpdateFrequency = config.getLong(
                 QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
-                QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS) / 2;
+                QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS);
         // Maximum number of entries (tables) to store in the cache at one time
-        final long maxTableStatsCacheEntries = config.getLong(
-                QueryServices.STATS_MAX_CACHE_ENTRIES,
-                QueryServicesOptions.DEFAULT_STATS_MAX_CACHE_ENTRIES);
+        final long maxTableStatsCacheSize = config.getLong(
+                QueryServices.STATS_MAX_CACHE_SIZE,
+                QueryServicesOptions.DEFAULT_STATS_MAX_CACHE_SIZE);
         cache = CacheBuilder.newBuilder()
-                .maximumSize(maxTableStatsCacheEntries)
-                .expireAfterAccess(halfStatsUpdateFreq, TimeUnit.MILLISECONDS)
+                // Expire entries a given amount of time after they were written
+                .expireAfterWrite(statsUpdateFrequency, TimeUnit.MILLISECONDS)
+                // Maximum total weight (size in bytes) of stats entries
+                .maximumWeight(maxTableStatsCacheSize)
+                // Defer actual size to the PTableStats.getEstimatedSize()
+                .weigher(new Weigher<ImmutableBytesPtr, PTableStats>() {
+                    @Override public int weigh(ImmutableBytesPtr key, PTableStats stats) {
+                        return stats.getEstimatedSize();
+                    }
+                })
+                // Log removals at TRACE for debugging
                 .removalListener(new PhoenixStatsCacheRemovalListener())
-                .build();
+                // Automatically load the cache when entries are missing
+                .build(new StatsLoader());
+    }
+
+    /**
+     * {@link CacheLoader} implementation for the Phoenix Table Stats cache.
+     */
+    protected class StatsLoader extends CacheLoader<ImmutableBytesPtr, PTableStats> {
+
+      @Override
+      public PTableStats load(ImmutableBytesPtr tableName) throws Exception {
+        /*
+         *  The shared view index case is tricky, because we don't have
+         *  table metadata for it, only an HBase table. We do have stats,
+         *  though, so we'll query them directly here and cache them so
+         *  we don't keep querying for them.
+         */
+        @SuppressWarnings("deprecation")
+        HTableInterface statsHTable = queryServices.getTable(SchemaUtil.getPhysicalName(
+                PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES,
+                        queryServices.getProps()).getName());
+        final byte[] tableNameBytes = tableName.copyBytesIfNecessary();
+        try {
+            PTableStats stats = StatisticsUtil.readStatistics(statsHTable, tableNameBytes,
+                Long.MAX_VALUE);
+            traceStatsUpdate(tableNameBytes, stats);
+            return stats;
+        } catch (IOException e) {
+            logger.warn("Unable to read from stats table", e);
+            // Just cache empty stats. We'll try again after some time anyway.
+            return PTableStats.EMPTY_STATS;
+        } finally {
+            try {
+                statsHTable.close();
+            } catch (IOException e) {
+                // Log, but continue. We have our stats anyway now.
+                logger.warn("Unable to close stats table", e);
+            }
+        }
+      }
+
+      /**
+       * Logs a trace message for newly inserted entries to the stats cache.
+       */
+      void traceStatsUpdate(byte[] tableName, PTableStats stats) {
+        logger.trace("Updating local TableStats cache for {}, size={}bytes",
+              Bytes.toString(tableName), stats.getEstimatedSize());
+      }
     }
 
     /**
      * Returns the underlying cache. Try to use the provided methods instead of accessing the cache
      * directly.
      */
-    Cache<ImmutableBytesPtr, PTableStats> getCache() {
+    LoadingCache<ImmutableBytesPtr, PTableStats> getCache() {
         return cache;
     }
 
@@ -71,11 +136,10 @@ public class TableStatsCache {
      * Returns the PTableStats for the given <code>tableName</code, using the provided
      * <code>valueLoader</code> if no such mapping exists.
      *
-     * @see com.google.common.cache.Cache#get(Object, Callable)
+     * @see com.google.common.cache.LoadingCache#get(Object)
      */
-    public PTableStats get(ImmutableBytesPtr tableName, Callable<? extends PTableStats> valueLoader)
-            throws ExecutionException {
-        return getCache().get(tableName, valueLoader);
+    public PTableStats get(ImmutableBytesPtr tableName) throws ExecutionException {
+        return getCache().get(tableName);
     }
 
     /**

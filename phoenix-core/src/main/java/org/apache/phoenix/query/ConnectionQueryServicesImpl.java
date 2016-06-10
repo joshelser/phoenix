@@ -331,7 +331,6 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         // find the HBase version and use that to determine the KeyValueBuilder that should be used
         String hbaseVersion = VersionInfo.getVersion();
         this.kvBuilder = KeyValueBuilder.get(hbaseVersion);
-        this.tableStatsCache = new TableStatsCache(config);
         this.returnSequenceValues = props.getBoolean(QueryServices.RETURN_SEQUENCE_VALUES_ATTRIB, QueryServicesOptions.DEFAULT_RETURN_SEQUENCE_VALUES);
         this.renewLeaseEnabled = config.getBoolean(RENEW_LEASE_ENABLED, DEFAULT_RENEW_LEASE_ENABLED);
         this.renewLeasePoolSize = config.getInt(RENEW_LEASE_THREAD_POOL_SIZE, DEFAULT_RENEW_LEASE_THREAD_POOL_SIZE);
@@ -343,6 +342,8 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
             list.add(queue);
         }
         connectionQueues = ImmutableList.copyOf(list);
+        // A little bit of a smell to leak `this` here, but should not be a problem
+        this.tableStatsCache = new TableStatsCache(this, config);
     }
 
     @Override
@@ -3351,40 +3352,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     @Override
     public PTableStats getTableStats(final byte[] physicalName, final long clientTimeStamp) throws SQLException {
         try {
-            // #get(K,Callable<V>) does block on the first loader to complete instead of running
-            // many. Subsequent get()'s will return the value loaded by the first call.
-            return tableStatsCache.get(new ImmutableBytesPtr(physicalName), new Callable<PTableStats>() {
-                @Override
-                public PTableStats call() throws Exception {
-                    /*
-                     *  The shared view index case is tricky, because we don't have
-                     *  table metadata for it, only an HBase table. We do have stats,
-                     *  though, so we'll query them directly here and cache them so
-                     *  we don't keep querying for them.
-                     */
-                    @SuppressWarnings("deprecation")
-                    HTableInterface statsHTable = ConnectionQueryServicesImpl.this
-                            .getTable(SchemaUtil.getPhysicalName(PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES,
-                                    ConnectionQueryServicesImpl.this.getProps()).getName());
-                    try {
-                        PTableStats stats = StatisticsUtil.readStatistics(statsHTable, physicalName, clientTimeStamp);
-                        traceStatsUpdate(physicalName, stats);
-                        return stats;
-                    } catch (IOException e) {
-                        logger.warn("Unable to read from stats table", e);
-                        // Just cache empty stats. We'll try again after some time anyway.
-                        return PTableStats.EMPTY_STATS;
-                    } finally {
-                        try {
-                            statsHTable.close();
-                        } catch (IOException e) {
-                            // Log, but continue. We have our stats anyway now.
-                            logger.warn("Unable to close stats table", e);
-                        }
-                    }
-                }
-
-            });
+            return tableStatsCache.get(new ImmutableBytesPtr(physicalName));
         } catch (ExecutionException e) {
             throw ServerUtil.parseServerException(e);
         }
@@ -3393,14 +3361,6 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     @Override
     public void addTableStats(PTable table, PTableStats stats) {
         this.tableStatsCache.put(table, stats);
-    }
-
-    /**
-     * Logs a trace message for newly inserted entries to the stats cache.
-     */
-    void traceStatsUpdate(byte[] tableName, PTableStats stats) {
-      logger.trace("Updating local TableStats cache for {}, size={}bytes",
-            Bytes.toString(tableName), stats.getEstimatedSize());
     }
 
     @Override
