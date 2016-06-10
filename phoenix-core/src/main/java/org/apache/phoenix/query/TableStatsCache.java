@@ -53,7 +53,7 @@ public class TableStatsCache {
 
     public TableStatsCache(ConnectionQueryServices queryServices, Configuration config) {
         this.queryServices = Objects.requireNonNull(queryServices);
-        // Expire table stats cache entries after
+        // Number of millis to expire cache values after write
         final long statsUpdateFrequency = config.getLong(
                 QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
                 QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS);

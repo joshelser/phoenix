@@ -637,7 +637,13 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
         return new MetaDataMutationResult(MutationCode.SCHEMA_ALREADY_EXISTS, 0, null);
     }
 
-    @Override
+    /**
+     * Manually adds {@link PTableStats} for a table to the client-side cache. Not a
+     * {@link ConnectionQueryServices} method.
+     *
+     * @param table Table name
+     * @param stats Stats instance
+     */
     public void addTableStats(PTable table, PTableStats stats) {
         tableStatsCache.getCache().put(Objects.requireNonNull(table).getName().getBytesPtr(),
             Objects.requireNonNull(stats));

@@ -3359,11 +3359,6 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     }
 
     @Override
-    public void addTableStats(PTable table, PTableStats stats) {
-        this.tableStatsCache.put(table, stats);
-    }
-
-    @Override
     public int getSequenceSaltBuckets() {
         return nSequenceSaltBuckets;
     }
@@ -3716,6 +3711,17 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         } finally {
             if (sqlE != null) { throw sqlE; }
         }
+    }
+
+    /**
+     * Manually adds {@link PTableStats} for a table to the client-side cache. Not a
+     * {@link ConnectionQueryServices} method.
+     *
+     * @param table Table name
+     * @param stats Stats instance
+     */
+    public void addTableStats(PTable table, PTableStats stats) {
+        this.tableStatsCache.put(table, stats);
     }
 
 }

@@ -33,6 +33,7 @@ import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.jdbc.PhoenixStatement;
 import org.apache.phoenix.query.BaseConnectionlessQueryTest;
 import org.apache.phoenix.query.ConnectionQueryServicesImpl;
+import org.apache.phoenix.query.ConnectionlessQueryServicesImpl;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.schema.PTable;
@@ -673,7 +674,7 @@ public class SkipScanBigFilterTest extends BaseConnectionlessQueryTest {
         };
         PhoenixConnection pConn = conn.unwrap(PhoenixConnection.class);
         pConn.addTable(table, System.currentTimeMillis());
-        pConn.getQueryServices().addTableStats(table, stats);
+        ((ConnectionlessQueryServicesImpl) pConn.getQueryServices()).addTableStats(table, stats);
 
         String query = "SELECT count(1) cnt,\n" + 
                 "       coalesce(SUM(impressions), 0.0) AS \"impressions\",\n" + 
