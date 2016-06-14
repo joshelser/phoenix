@@ -119,8 +119,9 @@ public class TableStatsCache {
        * Logs a trace message for newly inserted entries to the stats cache.
        */
       void traceStatsUpdate(byte[] tableName, PTableStats stats) {
-        logger.trace("Updating local TableStats cache for {}, size={}bytes",
-              Bytes.toString(tableName), stats.getEstimatedSize());
+        logger.trace("Updating local TableStats cache (id={}) for {}, size={}bytes",
+              new Object[] {Objects.hashCode(TableStatsCache.this), Bytes.toString(tableName),
+              stats.getEstimatedSize()});
       }
     }
 
