@@ -3715,7 +3715,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
 
     /**
      * Manually adds {@link PTableStats} for a table to the client-side cache. Not a
-     * {@link ConnectionQueryServices} method.
+     * {@link ConnectionQueryServices} method. Exposed for testing purposes.
      *
      * @param table Table name
      * @param stats Stats instance

@@ -82,47 +82,40 @@ public class TableStatsCache {
      * {@link CacheLoader} implementation for the Phoenix Table Stats cache.
      */
     protected class StatsLoader extends CacheLoader<ImmutableBytesPtr, PTableStats> {
-
-      @Override
-      public PTableStats load(ImmutableBytesPtr tableName) throws Exception {
-        /*
-         *  The shared view index case is tricky, because we don't have
-         *  table metadata for it, only an HBase table. We do have stats,
-         *  though, so we'll query them directly here and cache them so
-         *  we don't keep querying for them.
-         */
-        @SuppressWarnings("deprecation")
-        HTableInterface statsHTable = queryServices.getTable(SchemaUtil.getPhysicalName(
-                PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES,
-                        queryServices.getProps()).getName());
-        final byte[] tableNameBytes = tableName.copyBytesIfNecessary();
-        try {
-            PTableStats stats = StatisticsUtil.readStatistics(statsHTable, tableNameBytes,
-                Long.MAX_VALUE);
-            traceStatsUpdate(tableNameBytes, stats);
-            return stats;
-        } catch (IOException e) {
-            logger.warn("Unable to read from stats table", e);
-            // Just cache empty stats. We'll try again after some time anyway.
-            return PTableStats.EMPTY_STATS;
-        } finally {
+        @Override
+        public PTableStats load(ImmutableBytesPtr tableName) throws Exception {
+            @SuppressWarnings("deprecation")
+            HTableInterface statsHTable = queryServices.getTable(SchemaUtil.getPhysicalName(
+                    PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES,
+                            queryServices.getProps()).getName());
+            final byte[] tableNameBytes = tableName.copyBytesIfNecessary();
             try {
-                statsHTable.close();
+                PTableStats stats = StatisticsUtil.readStatistics(statsHTable, tableNameBytes,
+                        Long.MAX_VALUE);
+                traceStatsUpdate(tableNameBytes, stats);
+                return stats;
             } catch (IOException e) {
-                // Log, but continue. We have our stats anyway now.
-                logger.warn("Unable to close stats table", e);
+                logger.warn("Unable to read from stats table", e);
+                // Just cache empty stats. We'll try again after some time anyway.
+                return PTableStats.EMPTY_STATS;
+            } finally {
+                try {
+                    statsHTable.close();
+                } catch (IOException e) {
+                    // Log, but continue. We have our stats anyway now.
+                    logger.warn("Unable to close stats table", e);
+                }
             }
         }
-      }
 
-      /**
-       * Logs a trace message for newly inserted entries to the stats cache.
-       */
-      void traceStatsUpdate(byte[] tableName, PTableStats stats) {
-        logger.trace("Updating local TableStats cache (id={}) for {}, size={}bytes",
-              new Object[] {Objects.hashCode(TableStatsCache.this), Bytes.toString(tableName),
-              stats.getEstimatedSize()});
-      }
+        /**
+         * Logs a trace message for newly inserted entries to the stats cache.
+         */
+        void traceStatsUpdate(byte[] tableName, PTableStats stats) {
+            logger.trace("Updating local TableStats cache (id={}) for {}, size={}bytes",
+                  new Object[] {Objects.hashCode(TableStatsCache.this), Bytes.toString(tableName),
+                  stats.getEstimatedSize()});
+        }
     }
 
     /**
@@ -149,6 +142,7 @@ public class TableStatsCache {
      * @see com.google.common.cache.Cache#put(Object, Object)
      */
     public void put(PTable table, PTableStats stats) {
+        // Defer the null check on stats to the overloaded put()
         put(Objects.requireNonNull(table).getName().getBytesPtr(), stats);
     }
 
@@ -191,7 +185,8 @@ public class TableStatsCache {
                 ImmutableBytesPtr ptr = notification.getKey();
                 String tableName = new String(ptr.get(), ptr.getOffset(), ptr.getLength());
                 logger.trace("Cached stats for {} with size={}bytes was evicted due to cause={}",
-                    new Object[] {tableName, notification.getValue().getEstimatedSize(), cause});
+                        new Object[] {tableName, notification.getValue().getEstimatedSize(),
+                                cause});
             }
         }
 
