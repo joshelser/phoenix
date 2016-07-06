@@ -22,10 +22,7 @@ import org.apache.calcite.avatica.Meta;
 import org.apache.calcite.avatica.remote.Driver;
 import org.apache.calcite.avatica.remote.LocalService;
 import org.apache.calcite.avatica.remote.Service;
-import org.apache.calcite.avatica.server.AvaticaHandler;
-import org.apache.calcite.avatica.server.AvaticaServerConfiguration;
 import org.apache.calcite.avatica.server.DoAsRemoteUserCallback;
-import org.apache.calcite.avatica.server.HandlerFactory;
 import org.apache.calcite.avatica.server.HttpServer;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -168,6 +165,8 @@ public final class Main extends Configured implements Tool, Runnable {
     logProcessInfo(getConf());
     try {
       final boolean isKerberos = "kerberos".equalsIgnoreCase(getConf().get(QueryServices.QUERY_SERVER_HBASE_SECURITY_CONF_ATTRIB));
+      final String basicAuthFileName = getConf().get(QueryServices.QUERY_SERVER_BASIC_AUTHENTICATION_FILE);
+      final String digestAuthFileName = getConf().get(QueryServices.QUERY_SERVER_DIGEST_AUTHENTICATION_FILE);
 
       // handle secure cluster credentials
       if (isKerberos) {
@@ -181,6 +180,14 @@ public final class Main extends Configured implements Tool, Runnable {
         SecurityUtil.login(getConf(), QueryServices.QUERY_SERVER_KEYTAB_FILENAME_ATTRIB,
             QueryServices.QUERY_SERVER_KERBEROS_PRINCIPAL_ATTRIB, hostname);
         LOG.info("Login successful.");
+      }
+
+      if (null != basicAuthFileName) {
+        verifyBasicAuthConfiguration(basicAuthFileName, digestAuthFileName, isKerberos);
+      }
+
+      if (null != digestAuthFileName) {
+        verifyDigestAuthConfiguration(basicAuthFileName, digestAuthFileName, isKerberos);
       }
 
       Class<? extends PhoenixMetaFactory> factoryClass = getConf().getClass(
@@ -199,18 +206,11 @@ public final class Main extends Configured implements Tool, Runnable {
 
       // Enable SPNEGO and Impersonation when using Kerberos
       if (isKerberos) {
-        UserGroupInformation ugi = UserGroupInformation.getLoginUser();
-
-        // Make sure the proxyuser configuration is up to date
-        ProxyUsers.refreshSuperUserGroupsConfiguration(getConf());
-
-        String keytabPath = getConf().get(QueryServices.QUERY_SERVER_KEYTAB_FILENAME_ATTRIB);
-        File keytab = new File(keytabPath);
-
-        // Enable SPNEGO and impersonation (through standard Hadoop configuration means)
-        builder.withSpnego(ugi.getUserName())
-            .withAutomaticLogin(keytab)
-            .withImpersonation(new PhoenixDoAsCallback(ugi));
+        configureSpnegoAuthServer(builder);
+      } else if (null != basicAuthFileName) {
+        configureBasicAuthServer(builder);
+      } else if (null != digestAuthFileName) {
+        configureDigestAuthServer(builder);
       }
 
       // Build and start the HttpServer
@@ -248,6 +248,84 @@ public final class Main extends Configured implements Tool, Runnable {
     return serialization;
   }
 
+  /**
+   * Validates the configuration values for authentication with PQS for the HTTP Basic mechanism.
+   */
+  void verifyBasicAuthConfiguration(String basicAuthFileName, String digestAuthFileName, boolean isKerberos) {
+    if (isKerberos) {
+      throw new IllegalArgumentException("HTTP Basic authentication and Kerberos/SPNEGO authentication are mutually exclusive");
+    }
+    if (null != digestAuthFileName) {
+      throw new IllegalArgumentException("HTTP Basic and Digest authentication are mutually exclusive");
+    }
+    File authFile = new File(basicAuthFileName);
+    if (!authFile.isFile()) {
+      throw new IllegalArgumentException(basicAuthFileName + " is not a regular (existent) file");
+    }
+  }
+
+  /**
+   * Validates the configuration values for authentication with PQS for the HTTP Digest mechanism.
+   */
+  void verifyDigestAuthConfiguration(String basicAuthFileName, String digestAuthFileName, boolean isKerberos) {
+    if (isKerberos) {
+      throw new IllegalArgumentException("HTTP Digest authentication and Kerberos/SPNEGO authentication are mutually exclusive");
+    }
+    if (null != basicAuthFileName) {
+      throw new IllegalArgumentException("HTTP Basic and Digest authentication are mutually exclusive");
+    }
+    File authFile = new File(digestAuthFileName);
+    if (!authFile.isFile()) {
+      throw new IllegalArgumentException(digestAuthFileName + " is not a regular (existent) file");
+    }
+  }
+
+  /**
+   * Configures the HttpServer to use SPNEGO for Kerberos authentication.
+   */
+  void configureSpnegoAuthServer(HttpServer.Builder builder) throws IOException {
+    UserGroupInformation ugi = UserGroupInformation.getLoginUser();
+
+    // Make sure the proxyuser configuration is up to date
+    ProxyUsers.refreshSuperUserGroupsConfiguration(getConf());
+
+    String keytabPath = getConf().get(QueryServices.QUERY_SERVER_KEYTAB_FILENAME_ATTRIB);
+    File keytab = new File(keytabPath);
+
+    // Enable SPNEGO and impersonation (through standard Hadoop configuration means)
+    builder.withSpnego(ugi.getUserName())
+        .withAutomaticLogin(keytab)
+        .withImpersonation(new PhoenixDoAsCallback(ugi));
+  }
+
+  /**
+   * Configures the HttpServer to use HTTP Basic authentication.
+   */
+  void configureBasicAuthServer(HttpServer.Builder builder) {
+    final String basicAuthFileName = getConf().get(QueryServices.QUERY_SERVER_BASIC_AUTHENTICATION_FILE);
+    String[] basicAuthRoles = getConf().getStrings(QueryServices.QUERY_SERVER_BASIC_AUTHENTICATION_ROLES);
+    if (null == basicAuthRoles) {
+      basicAuthRoles = new String[0];
+    }
+
+    // Enable HTTP Basic authentication with Jetty user properties file
+    builder.withBasicAuthentication(basicAuthFileName, basicAuthRoles);
+  }
+
+  /**
+   * Configures the HttpServer to use HTTP Digest authentication.
+   */
+  void configureDigestAuthServer(HttpServer.Builder builder) {
+    final String digestAuthFileName = getConf().get(QueryServices.QUERY_SERVER_DIGEST_AUTHENTICATION_FILE);
+    String[] digestAuthRoles = getConf().getStrings(QueryServices.QUERY_SERVER_DIGEST_AUTHENTICATION_ROLES);
+    if (null == digestAuthRoles) {
+      digestAuthRoles = new String[0];
+    }
+
+    // Enable HTTP Digest authentication with Jetty user properties file
+    builder.withDigestAuthentication(digestAuthFileName, digestAuthRoles);
+
+  }
   @Override public void run() {
     try {
       retCode = run(argv);

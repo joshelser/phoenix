@@ -41,6 +41,8 @@ phoenix_utils.setPath()
 url = "localhost:8765"
 sqlfile = ""
 serialization_key = 'phoenix.queryserver.serialization'
+basic_authentication_key = 'phoenix.queryserver.basic.authentication.file'
+digest_authentication_key = 'phoenix.queryserver.digest.authentication.file'
 
 def usage_and_exit():
     sys.exit("usage: sqlline-thin.py [host[:port]] [sql_file]")
@@ -85,6 +87,55 @@ def get_serialization():
     if stdout == 'null':
         return default_serialization
     return stdout
+
+def get_avatica_authentication():
+    '''
+    Avatica provides support for HTTP Basic and Digest authentication (whereas Phoenix supports Kerberos
+    authentication pushed down into HBase).
+    '''
+    env=os.environ.copy()
+    if os.name == 'posix':
+      hbase_exec_name = 'hbase'
+    elif os.name == 'nt':
+      hbase_exec_name = 'hbase.cmd'
+    else:
+      print 'Unknown platform "%s", defaulting to HBase executable of "hbase"' % os.name
+      hbase_exec_name = 'hbase'
+
+    hbase_cmd = phoenix_utils.which(hbase_exec_name)
+    if hbase_cmd is None:
+        print 'Failed to find hbase executable on PATH, assuming no Avatica-based authentication'
+        return None
+
+    env['HBASE_CONF_DIR'] = phoenix_utils.hbase_conf_dir
+    proc = subprocess.Popen([hbase_cmd, 'org.apache.hadoop.hbase.util.HBaseConfTool', basic_authentication_key],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (stdout, stderr) = proc.communicate()
+    if proc.returncode != 0:
+        print 'Failed to extract basic authentication from hbase-site.xml'
+    # Don't expect this to happen
+    if stdout is None:
+        stdout = ''
+
+    basic_auth_file = stdout.strip()
+    if basic_auth_file != 'null':
+        return 'BASIC'
+
+    proc = subprocess.Popen([hbase_cmd, 'org.apache.hadoop.hbase.util.HBaseConfTool', digest_authentication_key],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (stdout, stderr) = proc.communicate()
+    if proc.returncode != 0:
+        print 'Failed to extract digest authentication from hbase-site.xml'
+    # Don't expect this to happen
+    if stdout is None:
+        stdout = ''
+
+    digest_auth_file = stdout.strip()
+    if digest_auth_file != 'null':
+        return 'DIGEST'
+
+    # Not basic or digest auth (kerberos auth is handled in java code)
+    return None
 
 if len(sys.argv) == 1:
     pass
@@ -145,12 +196,19 @@ if java_home:
 else:
     java = 'java'
 
+auth_options = ''
+avatica_auth_method = get_avatica_authentication()
+if avatica_auth_method:
+    # Avoid prompting for password since we have no means to keep it off the commandline (viewable by `ps`)
+    username = raw_input('QueryServer user name: ')
+    auth_options = ';authentication={};avatica_user={}'.format(avatica_auth_method, username)
+
 java_cmd = java + ' $PHOENIX_OPTS ' + \
     ' -cp "' + phoenix_utils.hbase_conf_dir + os.pathsep + phoenix_utils.phoenix_thin_client_jar + \
     os.pathsep + phoenix_utils.hadoop_conf + os.pathsep + phoenix_utils.hadoop_classpath + '" -Dlog4j.configuration=file:' + \
     os.path.join(phoenix_utils.current_dir, "log4j.properties") + \
     " org.apache.phoenix.queryserver.client.SqllineWrapper -d org.apache.phoenix.queryserver.client.Driver " + \
-    " -u \"jdbc:phoenix:thin:url=" + url + ";serialization=" + serialization + "\"" + \
+    " -u \"jdbc:phoenix:thin:url=" + url + ";serialization=" + serialization + auth_options + "\"" + \
     " -n none -p none --color=" + colorSetting + " --fastConnect=false --verbose=true " + \
     " --isolation=TRANSACTION_READ_COMMITTED " + sqlfile
 
