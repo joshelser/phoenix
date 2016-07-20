@@ -107,16 +107,145 @@ joda-time
 
 jets3t
 
-   Copyright 2008 James Murty
+  Copyright 2008 James Murty
 
-   This product includes software developed by:
+  This product includes software developed by:
 
-   The Apache Software Foundation (http://www.apache.org/).
-   
-   The ExoLab Project (http://www.exolab.org/)
+  The Apache Software Foundation (http://www.apache.org/).
+  
+  The ExoLab Project (http://www.exolab.org/)
 
-   Sun Microsystems (http://www.sun.com/)
-   
-   Codehaus (http://castor.codehaus.org)
-   
-   Tatu Saloranta (http://wiki.fasterxml.com/TatuSaloranta)
+  Sun Microsystems (http://www.sun.com/)
+  
+  Codehaus (http://castor.codehaus.org)
+  
+  Tatu Saloranta (http://wiki.fasterxml.com/TatuSaloranta)
+
+Neko HTML
+
+  Copyright 2002-2013, Andy Clark, Marc Guillemot.
+
+Apache Commons Lang
+
+  This product includes software from the Spring Framework,
+  under the Apache License 2.0 (see: StringUtils.containsWhitespace())
+
+Apache Commons Math3 3.1.1
+
+  ===============================================================================
+  
+  The BracketFinder (package org.apache.commons.math3.optimization.univariate)
+  and PowellOptimizer (package org.apache.commons.math3.optimization.general)
+  classes are based on the Python code in module "optimize.py" (version 0.5)
+  developed by Travis E. Oliphant for the SciPy library (http://www.scipy.org/)
+  Copyright © 2003-2009 SciPy Developers.
+  ===============================================================================
+  
+  The LinearConstraint, LinearObjectiveFunction, LinearOptimizer,
+  RelationShip, SimplexSolver and SimplexTableau classes in package
+  org.apache.commons.math3.optimization.linear include software developed by
+  Benjamin McCann (http://www.benmccann.com) and distributed with
+  the following copyright: Copyright 2009 Google Inc.
+  ===============================================================================
+  
+  This product includes software developed by the
+  University of Chicago, as Operator of Argonne National
+  Laboratory.
+  The LevenbergMarquardtOptimizer class in package
+  org.apache.commons.math3.optimization.general includes software
+  translated from the lmder, lmpar and qrsolv Fortran routines
+  from the Minpack package
+  Minpack Copyright Notice (1999) University of Chicago.  All rights reserved
+  ===============================================================================
+  
+  The GraggBulirschStoerIntegrator class in package
+  org.apache.commons.math3.ode.nonstiff includes software translated
+  from the odex Fortran routine developed by E. Hairer and G. Wanner.
+  Original source copyright:
+  Copyright (c) 2004, Ernst Hairer
+  ===============================================================================
+  
+  The MersenneTwister class in package org.apache.commons.math3.random
+  includes software translated from the 2002-01-26 version of
+  the Mersenne-Twister generator written in C by Makoto Matsumoto and Takuji
+  Nishimura. Original source copyright:
+  Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
+  All rights reserved
+  ===============================================================================
+  
+  The HermiteInterpolator class and its corresponding test have been imported from
+  the orekit library distributed under the terms of the Apache 2 licence. Original
+  source copyright:
+  Copyright 2010-2012 CS Systèmes d'Information
+  ===============================================================================
+  
+  The creation of the package "o.a.c.m.analysis.integration.gauss" was inspired
+  by an original code donated by Sébastien Brisard.
+  ===============================================================================
+
+Apache Commons Math 3.3 not already covered by 3.1.1
+
+  The inverse error function implementation in the Erf class is based on CUDA
+  code developed by Mike Giles, Oxford-Man Institute of Quantitative Finance,
+  and published in GPU Computing Gems, volume 2, 2010.
+  ===============================================================================
+  
+  The BracketFinder (package org.apache.commons.math3.optimization.univariate)
+  and PowellOptimizer (package org.apache.commons.math3.optimization.general)
+  classes are based on the Python code in module "optimize.py" (version 0.5)
+  developed by Travis E. Oliphant for the SciPy library (http://www.scipy.org/)
+  Copyright © 2003-2009 SciPy Developers.
+  ===============================================================================
+  
+  The LinearConstraint, LinearObjectiveFunction, LinearOptimizer,
+  RelationShip, SimplexSolver and SimplexTableau classes in package
+  org.apache.commons.math3.optimization.linear include software developed by
+  Benjamin McCann (http://www.benmccann.com) and distributed with
+  the following copyright: Copyright 2009 Google Inc.
+  ===============================================================================
+
+Apache HBase
+
+  HBase-Common
+
+  This product includes portions of the Guava project v14, specifically
+  'hbase-common/src/main/java/org/apache/hadoop/hbase/io/LimitInputStream.java'
+  
+  Copyright (C) 2007 The Guava Authors
+  
+  Licensed under the Apache License, Version 2.0
+
+  HBase-Server
+
+  Our Orca logo we got here: http://www.vectorfree.com/jumping-orca
+  It is (c) 2012 by Vector Free user OverSurge
+  
+  It is licensed Creative Commons Attribution 3.0.
+  
+  We changed the logo by stripping the colored background, inverting
+  it and then rotating it some.
+  
+  Later we found that vectorfree.com image is not properly licensed.
+  The original is owned by vectorportal.com. The original was
+  relicensed so we could use it as Creative Commons Attribution 3.0.
+  The license is bundled with the download available here:
+  http://www.vectorportal.com/subcategory/205/KILLER-WHALE-FREE-VECTOR.eps/ifile/9136/detailtest.asp
+  --
+  This product includes portions of the Bootstrap project v3.0.0
+  
+  Copyright 2013 Twitter, Inc.
+  
+  Licensed under the Apache License v2.0
+  
+  This product uses the Glyphicons Halflings icon set.
+  
+  http://glyphicons.com/
+  
+  Copyright Jan Kovařík
+  
+  Licensed under the Apache License v2.0 as a part of the Bootstrap project.
+
+Apache HttpComponents Client - HttpClient
+
+  This project contains annotations derived from JCIP-ANNOTATIONS
+  Copyright (c) 2005 Brian Goetz and Tim Peierls. See http://www.jcip.net 
