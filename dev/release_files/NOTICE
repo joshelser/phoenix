@@ -33,6 +33,8 @@ Portions of this software were originally based on the following:
 
 Apache Batik
 
+  batik-css, batik-util
+
   This software contains code from the World Wide Web Consortium (W3C) for the 
   Document Object Model API (DOM API) and SVG Document Type Definition (DTD).
   
@@ -69,7 +71,7 @@ Google Guice
 
 java-xmlbuilder
 
-  Copyright 2008 James Murty (www.jamesmurty.com)
+  Copyright 2008-2014 James Murty (www.jamesmurty.com)
 
 LMAX Disruptor
 
@@ -249,3 +251,97 @@ Apache HttpComponents Client - HttpClient
 
   This project contains annotations derived from JCIP-ANNOTATIONS
   Copyright (c) 2005 Brian Goetz and Tim Peierls. See http://www.jcip.net 
+
+"Eclipse" Jetty
+
+  The UnixCrypt.java code implements the one way cryptography used by
+  Unix systems for simple password protection.  Copyright 1996 Aki Yoshida,
+  modified April 2001  by Iris Van den Broeke, Daniel Deville.
+  Permission to use, copy, modify and distribute UnixCrypt
+  for non-commercial or commercial purposes and without fee is
+  granted provided that the copyright notice appears in all copies.
+
+"Mort Bay" Jetty
+
+  Copyright 2004-2008 Mort Bay Consulting Pty. Ltd.
+
+Xalan-Java
+
+  Portions of this software was originally based on the following:
+ 
+   - software copyright (c) 1999-2002, Lotus Development Corporation., http://www.lotus.com.
+   - software copyright (c) 2001-2002, Sun Microsystems., http://www.sun.com.
+   - software copyright (c) 2003, IBM Corporation., http://www.ibm.com.
+   - voluntary contributions made by Ovidiu Predescu (ovidiu@cup.hp.com) on behalf of the 
+     Apache Software Foundation and was originally developed at Hewlett Packard Company. 
+
+Apache Xerces Java
+
+   Portions of this software were originally based on the following:
+     - software copyright (c) 1999, IBM Corporation., http://www.ibm.com.
+     - software copyright (c) 1999, Sun Microsystems., http://www.sun.com.
+     - voluntary contributions made by Paul Eng on behalf of the
+       Apache Software Foundation that were originally developed at iClick, Inc.,
+       software copyright (c) 1999.
+
+Apache XML Commons XML APIs
+
+   Portions of this software were originally based on the following:
+     - software copyright (c) 1999, IBM Corporation., http://www.ibm.com.
+     - software copyright (c) 1999, Sun Microsystems., http://www.sun.com.
+     - software copyright (c) 2000 World Wide Web Consortium, http://www.w3.org
+
+BoneCP Copyright 2009-2011 Wallace Wadge
+
+Apache Derby
+
+  Portions of Derby were originally developed by
+  International Business Machines Corporation and are
+  licensed to the Apache Software Foundation under the
+  "Software Grant and Corporate Contribution License Agreement",
+  informally known as the "Derby CLA".
+  The following copyright notice(s) were affixed to portions of the code
+  with which this file is now or was at one time distributed
+  and are placed here unaltered.
+  
+  (C) Copyright 1997,2004 International Business Machines Corporation.  All rights reserved.
+  
+  (C) Copyright IBM Corp. 2003.
+  
+  =========================================================================
+  
+  The portion of the functionTests under 'nist' was originally
+  developed by the National Institute of Standards and Technology (NIST),
+  an agency of the United States Department of Commerce, and adapted by
+  International Business Machines Corporation in accordance with the NIST
+  Software Acknowledgment and Redistribution document at
+  http://www.itl.nist.gov/div897/ctg/sql_form.htm
+  
+  =========================================================================
+  
+  The JDBC apis for small devices and JDBC3 (under java/stubs/jsr169 and
+  java/stubs/jdbc3) were produced by trimming sources supplied by the
+  Apache Harmony project. In addition, the Harmony SerialBlob and
+  SerialClob implementations are used. The following notice covers the Harmony sources:
+  
+  Portions of Harmony were originally developed by
+  Intel Corporation and are licensed to the Apache Software
+  Foundation under the "Software Grant and Corporate Contribution
+  License Agreement", informally known as the "Intel Harmony CLA".
+
+eigenbase-properties
+
+  Copyright (C) 2012-2015, Julian Hyde
+  
+  This product includes software from the Eigenbase project, licensed from
+  DynamoBI Corporation.
+  
+  Copyright (C) 2005 Dynamo BI Corporation
+
+jpam
+
+  Copyright 2003-2007 Greg Luck
+
+opencsv
+
+  Copyright 2005 Bytecode Pty Ltd.
