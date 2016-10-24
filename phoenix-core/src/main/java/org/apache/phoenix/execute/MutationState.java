@@ -49,6 +49,7 @@ import org.apache.htrace.Span;
 import org.apache.htrace.TraceScope;
 import org.apache.phoenix.cache.ServerCacheClient;
 import org.apache.phoenix.cache.ServerCacheClient.ServerCache;
+import org.apache.phoenix.cache.ServerCacheClient.ServerCache2;
 import org.apache.phoenix.compile.MutationPlan;
 import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MetaDataMutationResult;
@@ -844,7 +845,7 @@ public class MutationState implements SQLCloseable {
          */
         @Override
         public void delete(List<Delete> deletes) throws IOException {
-            ServerCache cache = null;
+            ServerCache2 cache = null;
             try {
                 PTable table = tableRef.getTable();
                 List<PTable> indexes = table.getIndexes();
@@ -1017,7 +1018,7 @@ public class MutationState implements SQLCloseable {
                     TableRef origTableRef = tableInfo.getOrigTableRef();
                     PTable table = origTableRef.getTable();
                     table.getIndexMaintainers(indexMetaDataPtr, connection);
-                    final ServerCache cache = tableInfo.isDataTable() ? setMetaDataOnMutations(origTableRef, mutationList, indexMetaDataPtr) : null;
+                    final ServerCache2 cache = tableInfo.isDataTable() ? setMetaDataOnMutations(origTableRef, mutationList, indexMetaDataPtr) : null;
                     // If we haven't retried yet, retry for this case only, as it's possible that
                     // a split will occur after we send the index metadata cache to all known
                     // region servers.
@@ -1131,7 +1132,7 @@ public class MutationState implements SQLCloseable {
         return (txnBytes == null || txnBytes.length==0) ? null : CODEC.decode(txnBytes);
     }
 
-    private ServerCache setMetaDataOnMutations(TableRef tableRef, List<? extends Mutation> mutations,
+    private ServerCache2 setMetaDataOnMutations(TableRef tableRef, List<? extends Mutation> mutations,
             ImmutableBytesWritable indexMetaDataPtr) throws SQLException {
         PTable table = tableRef.getTable();
         final byte[] tenantIdBytes;
@@ -1144,7 +1145,7 @@ public class MutationState implements SQLCloseable {
         } else {
             tenantIdBytes = connection.getTenantId() == null ? null : connection.getTenantId().getBytes();
         }
-        ServerCache cache = null;
+        ServerCache2 cache = null;
         byte[] attribValue = null;
         byte[] uuidValue = null;
         byte[] txState = ByteUtil.EMPTY_BYTE_ARRAY;

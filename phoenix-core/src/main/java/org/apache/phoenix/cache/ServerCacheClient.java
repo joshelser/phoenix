@@ -28,6 +28,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,6 +48,8 @@ import org.apache.hadoop.hbase.ipc.BlockingRpcCallback;
 import org.apache.hadoop.hbase.ipc.ServerRpcController;
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.phoenix.cache.ServerCacheClient.ServerCache2;
 import org.apache.phoenix.compile.ScanRanges;
 import org.apache.phoenix.coprocessor.ServerCachingProtocol.ServerCacheFactory;
 import org.apache.phoenix.coprocessor.generated.ServerCacheFactoryProtos;
@@ -60,8 +63,10 @@ import org.apache.phoenix.job.JobManager.JobCallable;
 import org.apache.phoenix.memory.MemoryManager.MemoryChunk;
 import org.apache.phoenix.monitoring.TaskExecutionMetricsHolder;
 import org.apache.phoenix.query.ConnectionQueryServices;
+import org.apache.phoenix.query.ConnectionQueryServicesImpl;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
+import org.apache.phoenix.query.ConnectionQueryServicesImpl.CacheOnServers;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.IndexType;
 import org.apache.phoenix.schema.TableRef;
@@ -142,6 +147,37 @@ public class ServerCacheClient {
             removeServerCache(id, servers);
         }
 
+    }
+
+    public class ServerCache2 implements SQLCloseable {
+        private final CacheOnServers cacheOnServers;
+        private final Set<HRegionLocation> loadedServers;
+
+        public ServerCache2(CacheOnServers cacheOnServers, Set<HRegionLocation> loadedServers) {
+            this.cacheOnServers = Objects.requireNonNull(cacheOnServers);
+            this.loadedServers = Objects.requireNonNull(loadedServers);
+        }
+
+        @Override
+        public void close() throws SQLException {
+            cacheOnServers.close(loadedServers);
+        }
+
+        public byte[] getId() {
+            return cacheOnServers.getCacheId();
+        }
+    }
+
+    public ServerCache2 addServerCache2(ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState, final ServerCacheFactory cacheFactory, final TableRef cacheUsingTableRef) throws SQLException {
+        ConnectionQueryServicesImpl services = (ConnectionQueryServicesImpl) connection.getQueryServices();
+        try {
+            Pair<CacheOnServers,Set<HRegionLocation>> p = services.getOrCreateServerCache(keyRanges, cachePtr, this, txState, cacheFactory, cacheUsingTableRef);
+            return new ServerCache2(p.getFirst(), p.getSecond());
+        } catch (SQLException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new SQLException(e);
+        }
     }
     
     public ServerCache addServerCache(ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState, final ServerCacheFactory cacheFactory, final TableRef cacheUsingTableRef) throws SQLException {

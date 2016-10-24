@@ -26,11 +26,13 @@ import static org.apache.phoenix.coprocessor.MetaDataProtocol.PHOENIX_PATCH_NUMB
 import static org.apache.phoenix.coprocessor.MetaDataProtocol.getVersion;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME_BYTES;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_STATS_NAME;
+import static org.apache.phoenix.monitoring.TaskExecutionMetricsHolder.NO_OP_INSTANCE;
 import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_DROP_METADATA;
 import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_RENEW_LEASE_ENABLED;
 import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_RENEW_LEASE_THREAD_POOL_SIZE;
 import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_RENEW_LEASE_THRESHOLD_MILLISECONDS;
 import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS;
+import static org.apache.phoenix.util.LogUtil.addCustomAnnotations;
 import static org.apache.phoenix.util.UpgradeUtil.getUpgradeSnapshotName;
 import static org.apache.phoenix.util.UpgradeUtil.upgradeTo4_5_0;
 
@@ -58,6 +60,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -65,6 +68,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -97,12 +102,15 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.VersionInfo;
 import org.apache.hadoop.hbase.zookeeper.ZKConfig;
+import org.apache.phoenix.cache.ServerCacheClient;
 import org.apache.phoenix.compile.MutationPlan;
+import org.apache.phoenix.compile.ScanRanges;
 import org.apache.phoenix.coprocessor.GroupedAggregateRegionObserver;
 import org.apache.phoenix.coprocessor.MetaDataEndpointImpl;
 import org.apache.phoenix.coprocessor.MetaDataProtocol;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MetaDataMutationResult;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MutationCode;
+import org.apache.phoenix.coprocessor.ServerCachingProtocol.ServerCacheFactory;
 import org.apache.phoenix.coprocessor.MetaDataRegionObserver;
 import org.apache.phoenix.coprocessor.PhoenixTransactionalProcessor;
 import org.apache.phoenix.coprocessor.ScanRegionObserver;
@@ -110,6 +118,7 @@ import org.apache.phoenix.coprocessor.SequenceRegionObserver;
 import org.apache.phoenix.coprocessor.ServerCachingEndpointImpl;
 import org.apache.phoenix.coprocessor.UngroupedAggregateRegionObserver;
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos;
+import org.apache.phoenix.coprocessor.generated.ServerCacheFactoryProtos;
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos.AddColumnRequest;
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos.ClearCacheRequest;
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos.ClearCacheResponse;
@@ -130,6 +139,11 @@ import org.apache.phoenix.coprocessor.generated.MetaDataProtos.GetVersionRespons
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos.MetaDataResponse;
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos.MetaDataService;
 import org.apache.phoenix.coprocessor.generated.MetaDataProtos.UpdateIndexStateRequest;
+import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.AddServerCacheRequest;
+import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.AddServerCacheResponse;
+import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.RemoveServerCacheRequest;
+import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.RemoveServerCacheResponse;
+import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.ServerCachingService;
 import org.apache.phoenix.exception.PhoenixIOException;
 import org.apache.phoenix.exception.RetriableUpgradeException;
 import org.apache.phoenix.exception.SQLExceptionCode;
@@ -150,9 +164,14 @@ import org.apache.phoenix.iterate.TableResultIterator.RenewLeaseStatus;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.jdbc.PhoenixEmbeddedDriver.ConnectionInfo;
+import org.apache.phoenix.job.JobManager.JobCallable;
+import org.apache.phoenix.monitoring.TaskExecutionMetricsHolder;
 import org.apache.phoenix.parse.PFunction;
 import org.apache.phoenix.parse.PSchema;
 import org.apache.phoenix.protobuf.ProtobufUtil;
+import org.apache.phoenix.query.ConnectionQueryServicesImpl.CacheOnServers;
+import org.apache.phoenix.query.ConnectionQueryServicesImpl.DelayedCreationFuture;
+import org.apache.phoenix.query.ConnectionQueryServicesImpl.ServerCache;
 import org.apache.phoenix.schema.ColumnAlreadyExistsException;
 import org.apache.phoenix.schema.ColumnFamilyNotFoundException;
 import org.apache.phoenix.schema.EmptySequenceCacheException;
@@ -178,6 +197,8 @@ import org.apache.phoenix.schema.SequenceKey;
 import org.apache.phoenix.schema.TableAlreadyExistsException;
 import org.apache.phoenix.schema.TableNotFoundException;
 import org.apache.phoenix.schema.TableProperty;
+import org.apache.phoenix.schema.TableRef;
+import org.apache.phoenix.schema.PTable.IndexType;
 import org.apache.phoenix.schema.stats.GuidePostsInfo;
 import org.apache.phoenix.schema.stats.GuidePostsKey;
 import org.apache.phoenix.schema.types.PBoolean;
@@ -196,6 +217,8 @@ import org.apache.phoenix.util.PhoenixRuntime;
 import org.apache.phoenix.util.PhoenixStopWatch;
 import org.apache.phoenix.util.PropertiesUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
+import org.apache.phoenix.util.SQLCloseable;
+import org.apache.phoenix.util.ScanUtil;
 import org.apache.phoenix.util.SchemaUtil;
 import org.apache.phoenix.util.ServerUtil;
 import org.apache.phoenix.util.UpgradeUtil;
@@ -4069,5 +4092,377 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
     @Override
     public boolean isUpgradeRequired() {
         return upgradeRequired.get();
+    }
+
+    /**
+     * Client-side representation of a server cache on a RegionServer. Call {@link #close()} when
+     * usage is complete to free cache up on region server.
+     */
+    public class ServerCache implements SQLCloseable {
+        private final int size;
+        private final byte[] id;
+        private final HRegionLocation location;
+        private AtomicReference<DelayedCreationFuture> loadingTask;
+        private final AtomicInteger activeUsers = new AtomicInteger(0);
+        private final TableRef tableRef;
+        private final ServerCacheClient cclient;
+        private volatile boolean destroyed = false;
+
+        public ServerCache(byte[] id, int size, HRegionLocation location, TableRef tableRef, ServerCacheClient cclient) {
+            this.id = id;
+            this.size = size;
+            this.location = Objects.requireNonNull(location);
+            this.tableRef = Objects.requireNonNull(tableRef);
+            this.cclient = Objects.requireNonNull(cclient);
+        }
+
+        /**
+         * Gets the size in bytes of hash cache
+         */
+        public int getSize() {
+            return size;
+        }
+
+        /**
+         * Gets the unique identifier for this hash cache
+         */
+        public byte[] getId() {
+            return id;
+        }
+
+        /**
+         * Call to free up cache on region servers when no longer needed
+         */
+        @Override
+        public void close() throws SQLException {
+            int activeUserSnapshot = activeUsers.decrementAndGet();
+            if (0 == activeUserSnapshot) {
+                SQLException exceptionToPropagate = null;
+                DelayedCreationFuture dcFuture = loadingTask.get();
+                try {
+                    if (!dcFuture.isCancelled() && !dcFuture.isDone()) {
+                        dcFuture.cancel(true);
+                    }
+                } catch (Exception e) {
+                    exceptionToPropagate = new SQLException(e);
+                }
+                try {
+                    removeServerCache();
+                } catch (SQLException e) {
+                    if (null != exceptionToPropagate) {
+                        exceptionToPropagate = e;
+                    }
+                }
+                if (null != exceptionToPropagate) {
+                    throw exceptionToPropagate;
+                }
+            }
+        }
+
+        synchronized void removeServerCache() throws SQLException {
+            if (destroyed) {
+                return;
+            }
+            destroyed = true;
+            final PTable ptable = tableRef.getTable();
+            final byte[] tableName = ptable.getPhysicalName().getBytes();
+            final byte[] key = location.getRegionInfo().getStartKey();
+            HTableInterface htable = ConnectionQueryServicesImpl.this.getTable(tableName);
+            SQLException exception = null;
+            try {
+                htable.coprocessorService(ServerCachingService.class, key, key, 
+                    new Batch.Call<ServerCachingService, RemoveServerCacheResponse>() {
+                        @Override public RemoveServerCacheResponse call(ServerCachingService instance) throws IOException {
+                            ServerRpcController controller = new ServerRpcController();
+                            BlockingRpcCallback<RemoveServerCacheResponse> rpcCallback = new BlockingRpcCallback<RemoveServerCacheResponse>();
+                            RemoveServerCacheRequest.Builder builder = RemoveServerCacheRequest.newBuilder();
+                            final byte[] tenantIdBytes = getTenantId(ptable, cclient);
+                            if (tenantIdBytes != null) {
+                                builder.setTenantId(ByteStringer.wrap(tenantIdBytes));
+                            }
+                            builder.setCacheId(ByteStringer.wrap(ServerCache.this.id));
+                            instance.removeServerCache(controller, builder.build(), rpcCallback);
+                            if(controller.getFailedOn() != null) {
+                              throw controller.getFailedOn();
+                            }
+                            return rpcCallback.get(); 
+                        }
+                });
+            } catch (Throwable t) { 
+              logger.error(addCustomAnnotations("Error trying to remove hash cache for " + Bytes.toString(key), cclient.getConnection()), t);
+              exception = new SQLException(t);
+            } finally {
+                try {
+                    Closeables.closeAll(Collections.singleton(htable));
+                } catch (IOException e) {
+                    if (null == exception) {
+                        throw new SQLException(e);
+                    }
+                }
+                if (null != exception) {
+                    throw exception;
+                }
+            }
+        }
+
+        public DelayedCreationFuture ensureCreated(JobCallable<Boolean> callable) {
+            DelayedCreationFuture dcFuture = new DelayedCreationFuture(callable);
+            // We must only have one caller who loads the cache on a RS. Every other caller waits.
+            // The DelayedCreationFuture avoids multiple submissions of the loading task
+            // to the thread pool.
+            activeUsers.incrementAndGet();
+            if (loadingTask.compareAndSet(null, dcFuture)) {
+                return dcFuture;
+            }
+            return loadingTask.get();
+        }
+    }
+
+    /**
+     * Represents a (single) serialized IndexMaintainer entry across many servers. 
+     */
+    public class CacheOnServers {
+        private final HashMap<HRegionLocation,ServerCache> cacheForServers = new HashMap<>();
+        private final ImmutableBytesWritable cacheData;
+        private final byte[] cacheId;
+        private final TableRef tableRef;
+        private final ServerCacheClient cclient;
+
+        public CacheOnServers(ImmutableBytesWritable cacheData, byte[] cacheId, TableRef tableRef, ServerCacheClient cclient) {
+            this.cacheData = Objects.requireNonNull(cacheData);
+            this.cacheId = cacheId;
+            this.tableRef = Objects.requireNonNull(tableRef);
+            this.cclient = Objects.requireNonNull(cclient);
+        }
+
+        public byte[] getCacheId() {
+            return cacheId;
+        }
+
+        public synchronized ServerCache getOrCreate(HRegionLocation location) {
+            ServerCache cache = cacheForServers.get(Objects.requireNonNull(location));
+            if (null == cache) {
+                cache = new ServerCache(cacheId, cacheData.getLength(), location, tableRef, cclient);
+                cacheForServers.put(location, cache);
+            }
+            return cache;
+        }
+
+        public synchronized void close(Set<HRegionLocation> serversToClear) throws SQLException {
+            SQLException firstException = null;
+            for (HRegionLocation location : serversToClear) {
+                ServerCache cache = cacheForServers.get(location);
+                try {
+                    if (null != cache) {
+                        cache.close();
+                    }
+                } catch (SQLException e) {
+                    if (null == firstException)  {
+                        firstException = e;
+                    }
+                }
+            }
+            if (null != firstException) {
+                throw firstException;
+            }
+        }
+    }
+
+    // Cache some serialized IndexMaintainers to servers where it is cached
+    private final ConcurrentHashMap<ImmutableBytesWritable, CacheOnServers> serverCacheState = new ConcurrentHashMap<>();
+
+    /**
+     * Creates a ServerCache entry on all necessary RegionServers (identified by the {@code keyRanges}) for the given
+     * {@code cachePtr}. If a RegionServer already has a ServerCache entry for that {@code cachePtr}, the entry is not recreated.
+     * If the ServerCache entry is currently being loaded on that RegionServer, this code will block for the first
+     * request to create the ServerCache entry to finish.
+     */
+    public Pair<CacheOnServers,Set<HRegionLocation>> getOrCreateServerCache(ScanRanges keyRanges, ImmutableBytesWritable cachePtr, ServerCacheClient cclient, final byte[] txState, final ServerCacheFactory cacheFactory, final TableRef ptableRef) throws InterruptedException, ExecutionException, TimeoutException, SQLException {
+        // Retrieve the ServerCache for our IndexMaintainers (or use the new one we provided)
+        CacheOnServers cache = serverCacheState.putIfAbsent(cachePtr, new CacheOnServers(cachePtr, ServerCacheClient.generateId(), ptableRef, cclient));
+
+        final PTable ptable = ptableRef.getTable();
+        final byte[] tableNameBytes = ptable.getPhysicalName().getBytes();
+        List<HRegionLocation> locations = getAllTableRegions(tableNameBytes);
+        @SuppressWarnings("deprecation")
+        final HTableInterface htable = getTable(tableNameBytes);
+        List<Future<Boolean>> serverCacheLoading = new ArrayList<>();
+        Set<HRegionLocation> cachedServers = new HashSet<>();
+        try {
+            // Compute the RegionServers which need this cache entry
+            for (HRegionLocation entry : locations) {
+                // Keep track of servers we've sent to and only send once
+                byte[] regionStartKey = entry.getRegionInfo().getStartKey();
+                byte[] regionEndKey = entry.getRegionInfo().getEndKey();
+                // If we haven't already selected this RS to cache on and it's not already cached on this RS
+                if (keyRanges.intersectRegion(regionStartKey, regionEndKey,
+                            ptable.getIndexType() == IndexType.LOCAL)) { 
+                    logger.trace("Checking for server cache on " + entry);
+                    // Collect this RS to cache the IndexMaintainer on
+                    cachedServers.add(entry);
+                    ServerCache singleCache = cache.getOrCreate(entry);
+                    DelayedCreationFuture future = singleCache.ensureCreated(createTaskToCacheOnServer(htable, regionStartKey, ptable, cclient, cache.getCacheId(), cachePtr, cacheFactory, txState));
+                    serverCacheLoading.add(future);
+                }
+            }
+            final int timeoutMs = getProps().getInt(QueryServices.THREAD_TIMEOUT_MS_ATTRIB, QueryServicesOptions.DEFAULT_THREAD_TIMEOUT_MS);
+            for (Future<Boolean> future : serverCacheLoading) {
+                future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            }
+        } finally {
+            if (null != htable) {
+                try {
+                    Closeables.closeAll(Collections.singleton(htable));
+                } catch (IOException e) {
+                    throw new SQLException(e);
+                }
+            }
+        }
+        return new Pair<>(cache, cachedServers);
+    }
+
+    /**
+     * Creates a {@link Callable} which can cache the given serialized data on the server presently hosting the Region which
+     * contains the given {@code key}.
+     */
+    private JobCallable<Boolean> createTaskToCacheOnServer(@SuppressWarnings("deprecation") final HTableInterface htable,
+          final byte[] key, final PTable ptable, final ServerCacheClient cclient, final byte[] cacheId, final ImmutableBytesWritable cachePtr,
+          final ServerCacheFactory cacheFactory, final byte[] txState) {
+      return new JobCallable<Boolean>() {
+          @Override
+          public Boolean call() throws Exception {
+              final Map<byte[], AddServerCacheResponse> results;
+              try {
+                  results = htable.coprocessorService(ServerCachingService.class, key, key, 
+                      new Batch.Call<ServerCachingService, AddServerCacheResponse>() {
+                          @Override
+                          public AddServerCacheResponse call(ServerCachingService instance) throws IOException {
+                              ServerRpcController controller = new ServerRpcController();
+                              BlockingRpcCallback<AddServerCacheResponse> rpcCallback =
+                                      new BlockingRpcCallback<AddServerCacheResponse>();
+                              AddServerCacheRequest.Builder builder = AddServerCacheRequest.newBuilder();
+                              final byte[] tenantIdBytes = getTenantId(ptable, cclient);
+                              if (tenantIdBytes != null) {
+                                  builder.setTenantId(ByteStringer.wrap(tenantIdBytes));
+                              }
+                              builder.setCacheId(ByteStringer.wrap(cacheId));
+                              builder.setCachePtr(org.apache.phoenix.protobuf.ProtobufUtil.toProto(cachePtr));
+                              ServerCacheFactoryProtos.ServerCacheFactory.Builder svrCacheFactoryBuider = ServerCacheFactoryProtos.ServerCacheFactory.newBuilder();
+                              svrCacheFactoryBuider.setClassName(cacheFactory.getClass().getName());
+                              builder.setCacheFactory(svrCacheFactoryBuider.build());
+                              builder.setTxState(ByteStringer.wrap(txState));
+                              instance.addServerCache(controller, builder.build(), rpcCallback);
+                              if(controller.getFailedOn() != null) {
+                                  throw controller.getFailedOn();
+                              }
+                              return rpcCallback.get(); 
+                          }
+                        });
+                } catch (Throwable t) {
+                    throw new Exception(t);
+                }
+                if(results != null && results.size() == 1){
+                    return results.values().iterator().next().getReturn();
+                }
+                return false;
+            }
+
+            /**
+             * Defines the grouping for round robin behavior.  All threads spawned to process
+             * this scan will be grouped together and time sliced with other simultaneously
+             * executing parallel scans.
+             */
+            @Override
+            public Object getJobId() {
+                return cclient;
+            }
+
+            @Override
+            public TaskExecutionMetricsHolder getTaskExecutionMetric() {
+                return NO_OP_INSTANCE;
+            }
+        };
+    }
+
+    /**
+     * Constructs the appropriate tenantId for the given {@code ptable}.
+     */
+    private static byte[] getTenantId(PTable ptable, ServerCacheClient cclient) throws IOException {
+        if(ptable.isMultiTenant()) {
+            try {
+                return cclient.getConnection().getTenantId() == null ? null :
+                        ScanUtil.getTenantIdBytes(
+                              ptable.getRowKeySchema(),
+                              ptable.getBucketNum() != null,
+                                    cclient.getConnection().getTenantId(), ptable.getViewIndexId() != null);
+            } catch (SQLException e) {
+                throw new IOException(e);
+            }
+        } else {
+            return cclient.getConnection().getTenantId() == null ? null : cclient.getConnection().getTenantId().getBytes();
+        }
+    }
+
+
+    /**
+     * Implementation of a {@link Future} which delays creation of an actual Future (created from
+     * an ExecutorService) to avoid multiple submissions of the Callable to that ES.
+     */
+    public class DelayedCreationFuture implements Future<Boolean> {
+        private volatile Future<Boolean> delegate = null;
+        private final JobCallable<Boolean> callable;
+
+        public DelayedCreationFuture(JobCallable<Boolean> callable) {
+            this.callable = Objects.requireNonNull(callable);
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            if (null == delegate) {
+                throw new IllegalStateException();
+            }
+            return delegate.cancel(mayInterruptIfRunning);
+        }
+
+        @Override
+        public boolean isCancelled() {
+            if (null == delegate) {
+                throw new IllegalStateException();
+            }
+            return delegate.isCancelled();
+        }
+
+        @Override
+        public boolean isDone() {
+            if (null == delegate) {
+                throw new IllegalStateException();
+            }
+            return delegate.isDone();
+        }
+
+        @Override
+        public Boolean get() throws InterruptedException, ExecutionException {
+            synchronized (this) {
+                if (null == delegate) {
+                    delegate = ConnectionQueryServicesImpl.this.getExecutor().submit(callable);
+                }
+            }
+            return delegate.get();
+        }
+
+        @Override
+        public Boolean get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+            synchronized (this) {
+                if (null == delegate) {
+                    delegate = ConnectionQueryServicesImpl.this.getExecutor().submit(callable);
+                }
+            }
+            return delegate.get(timeout, unit);
+        }
+
+        public Future<Boolean> getDelegate() {
+            assert null != delegate;
+            return delegate;
+        }
     }
 }
