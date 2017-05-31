@@ -18,6 +18,12 @@
 package org.apache.phoenix.hbase.index;
 
 import static org.apache.phoenix.hbase.index.util.IndexManagementUtil.rethrowIndexingException;
+import static org.apache.phoenix.metrics.PMetricRegistry.INDEX_PREPARE_FAILURE_COUNT_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.INDEX_PREPARE_TIME_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.INDEX_TOTAL_UPDATE_COUNT_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.INDEX_UPDATES_PER_MUTATION_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.INDEX_WRITE_COMPLETION_TIME_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.INDEX_WRITE_FAILURE_COUNT_SUFFIX;
 
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
@@ -27,6 +33,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -37,6 +44,7 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HConstants.OperationStatusCode;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Increment;
@@ -76,6 +84,7 @@ import org.apache.phoenix.hbase.index.write.IndexWriter;
 import org.apache.phoenix.hbase.index.write.RecoveryIndexWriter;
 import org.apache.phoenix.hbase.index.write.recovery.PerRegionIndexWriteCache;
 import org.apache.phoenix.hbase.index.write.recovery.StoreFailuresInCachePolicy;
+import org.apache.phoenix.metrics.PMetricRegistry;
 import org.apache.phoenix.trace.TracingUtils;
 import org.apache.phoenix.trace.util.NullSpan;
 import org.apache.phoenix.util.PropertiesUtil;
@@ -147,10 +156,27 @@ public class Indexer extends BaseRegionObserver {
     private static final int INDEX_WAL_COMPRESSION_MINIMUM_SUPPORTED_VERSION = VersionUtil
             .encodeVersion("0.94.9");
 
+    private PMetricRegistry rsMetricRegistry;
+    private String indexPostTimer;
+    private String indexPreTimer;
+    private String indexUpdateCounter;
+    private String indexPreFailureCounter;
+    private String indexPostFailureCounter;
+    private String updatesPerMutation;
+
   @Override
   public void start(CoprocessorEnvironment e) throws IOException {
       try {
         final RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) e;
+
+        rsMetricRegistry = PMetricRegistry.Factory.create(env);
+        TableName tableName = env.getRegionInfo().getTable();
+        indexPostTimer = tableName + INDEX_WRITE_COMPLETION_TIME_SUFFIX;
+        indexPreTimer = tableName + INDEX_PREPARE_TIME_SUFFIX;
+        indexUpdateCounter = tableName + INDEX_TOTAL_UPDATE_COUNT_SUFFIX;
+        updatesPerMutation = tableName + INDEX_UPDATES_PER_MUTATION_SUFFIX;
+        indexPreFailureCounter = tableName + INDEX_PREPARE_FAILURE_COUNT_SUFFIX;
+        indexPostFailureCounter = tableName + INDEX_WRITE_FAILURE_COUNT_SUFFIX;
         String serverName = env.getRegionServerServices().getServerName().getServerName();
         if (env.getConfiguration().getBoolean(CHECK_VERSION_CONF_KEY, true)) {
           // make sure the right version <-> combinations are allowed.
@@ -259,6 +285,7 @@ public class Indexer extends BaseRegionObserver {
           preBatchMutateWithExceptions(c, miniBatchOp);
           return;
       } catch (Throwable t) {
+          rsMetricRegistry.incrementCounter(indexPreFailureCounter, 1);
           rethrowIndexingException(t);
       }
       throw new RuntimeException(
@@ -329,10 +356,16 @@ public class Indexer extends BaseRegionObserver {
           if (current == null) {
               current = NullSpan.INSTANCE;
           }
+          long start = System.nanoTime();
+
           // get the index updates for all elements in this batch
           Collection<Pair<Mutation, byte[]>> indexUpdates =
                   this.builder.getIndexUpdate(miniBatchOp, mutations.values());
+
+          rsMetricRegistry.updateTimer(indexPreTimer, System.nanoTime() - start, TimeUnit.NANOSECONDS);
           current.addTimelineAnnotation("Built index updates, doing preStep");
+          rsMetricRegistry.incrementCounter(indexUpdateCounter, indexUpdates.size());
+          rsMetricRegistry.updateHistogram(updatesPerMutation, indexUpdates.size());
           TracingUtils.addAnnotation(current, "index update count", indexUpdates.size());
           byte[] tableName = c.getEnvironment().getRegion().getTableDesc().getTableName().getName();
           Iterator<Pair<Mutation, byte[]>> indexUpdatesItr = indexUpdates.iterator();
@@ -408,6 +441,7 @@ public class Indexer extends BaseRegionObserver {
       doPostWithExceptions(edit, m, durability);
       return;
     } catch (Throwable e) {
+      rsMetricRegistry.incrementCounter(indexPostFailureCounter, 1);
       rethrowIndexingException(e);
     }
     throw new RuntimeException(
@@ -428,6 +462,7 @@ public class Indexer extends BaseRegionObserver {
           if (current == null) {
               current = NullSpan.INSTANCE;
           }
+          long start = System.nanoTime();
 
           // there is a little bit of excess here- we iterate all the non-indexed kvs for this check first
           // and then do it again later when getting out the index updates. This should be pretty minor
@@ -466,6 +501,8 @@ public class Indexer extends BaseRegionObserver {
                   ikv.markBatchFinished();
               }
           }
+          long durationNanos = System.nanoTime() - start;
+          rsMetricRegistry.updateTimer(indexPostTimer, durationNanos, TimeUnit.NANOSECONDS);
       }
   }
 

@@ -9,6 +9,9 @@
  */
 package org.apache.phoenix.hbase.index.write;
 
+import static org.apache.phoenix.metrics.PMetricRegistry.SINGLE_INDEX_UPDATE_WRITE_TIME_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.SINGLE_INDEX_WRITE_FAILURES_SUFFIX;
+
 import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
@@ -16,6 +19,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -36,6 +40,8 @@ import org.apache.phoenix.hbase.index.table.CachingHTableFactory;
 import org.apache.phoenix.hbase.index.table.HTableFactory;
 import org.apache.phoenix.hbase.index.table.HTableInterfaceReference;
 import org.apache.phoenix.hbase.index.util.KeyValueBuilder;
+import org.apache.phoenix.metrics.NoopPMetricRegistry;
+import org.apache.phoenix.metrics.PMetricRegistry;
 import org.apache.phoenix.util.IndexUtil;
 
 import com.google.common.collect.Multimap;
@@ -62,6 +68,7 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
     private QuickFailingTaskRunner pool;
     private KeyValueBuilder kvBuilder;
     private RegionCoprocessorEnvironment env;
+    private PMetricRegistry rsMetricRegistry;
 
     public ParallelWriterIndexCommitter() {}
 
@@ -73,6 +80,7 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
     @Override
     public void setup(IndexWriter parent, RegionCoprocessorEnvironment env, String name) {
         this.env = env;
+        rsMetricRegistry = PMetricRegistry.Factory.create(env);
         Configuration conf = env.getConfiguration();
         setup(IndexWriterUtils.getDefaultDelegateHTableFactory(env),
                 ThreadPoolManager.getExecutor(
@@ -92,6 +100,7 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
         this.factory = new CachingHTableFactory(factory, cacheSize, env);
         this.pool = new QuickFailingTaskRunner(pool);
         this.stopped = stop;
+        rsMetricRegistry = new NoopPMetricRegistry();
     }
 
     @Override
@@ -133,7 +142,7 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
                 /**
                  * Do the actual write to the primary table. We don't need to worry about closing the table because that
                  * is handled the {@link CachingHTableFactory}.
-                 * 
+                 *
                  * @return
                  */
                 @SuppressWarnings("deprecation")
@@ -146,6 +155,7 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
                     if (LOG.isTraceEnabled()) {
                         LOG.trace("Writing index update:" + mutations + " to table: " + tableReference);
                     }
+                    long start = System.nanoTime();
                     HTableInterface table = null;
                     try {
                         if (allowLocalUpdates
@@ -168,10 +178,13 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
                         throwFailureIfDone();
                         table.batch(mutations);
                     } catch (SingleIndexWriteFailureException e) {
+                        rsMetricRegistry.incrementCounter(tableReference + SINGLE_INDEX_WRITE_FAILURES_SUFFIX, 1);
                         throw e;
                     } catch (IOException e) {
+                        rsMetricRegistry.incrementCounter(tableReference + SINGLE_INDEX_WRITE_FAILURES_SUFFIX, 1);
                         throw new SingleIndexWriteFailureException(tableReference.toString(), mutations, e);
                     } catch (InterruptedException e) {
+                        rsMetricRegistry.incrementCounter(tableReference + SINGLE_INDEX_WRITE_FAILURES_SUFFIX, 1);
                         // reset the interrupt status on the thread
                         Thread.currentThread().interrupt();
                         throw new SingleIndexWriteFailureException(tableReference.toString(), mutations, e);
@@ -181,6 +194,8 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
                             table.close();
                         }
                     }
+                    rsMetricRegistry.updateTimer(tableReference + SINGLE_INDEX_UPDATE_WRITE_TIME_SUFFIX,
+                        System.nanoTime() - start, TimeUnit.NANOSECONDS);
                     return null;
                 }
 
@@ -220,7 +235,7 @@ public class ParallelWriterIndexCommitter implements IndexCommitter {
      * <p>
      * This method should only be called <b>once</b>. Stopped state ({@link #isStopped()}) is managed by the external
      * {@link Stoppable}. This call does not delegate the stop down to the {@link Stoppable} passed in the constructor.
-     * 
+     *
      * @param why
      *            the reason for stopping
      */

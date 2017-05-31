@@ -9,6 +9,9 @@
  */
 package org.apache.phoenix.hbase.index.write.recovery;
 
+import static org.apache.phoenix.metrics.PMetricRegistry.SINGLE_INDEX_UPDATE_WRITE_TIME_SUFFIX;
+import static org.apache.phoenix.metrics.PMetricRegistry.SINGLE_INDEX_WRITE_FAILURES_SUFFIX;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -18,6 +21,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -44,6 +48,7 @@ import org.apache.phoenix.hbase.index.write.IndexCommitter;
 import org.apache.phoenix.hbase.index.write.IndexWriter;
 import org.apache.phoenix.hbase.index.write.IndexWriterUtils;
 import org.apache.phoenix.hbase.index.write.ParallelWriterIndexCommitter;
+import org.apache.phoenix.metrics.PMetricRegistry;
 import org.apache.phoenix.util.IndexUtil;
 
 import com.google.common.collect.Multimap;
@@ -81,11 +86,13 @@ public class TrackingParallelWriterIndexCommitter implements IndexCommitter {
     private CapturingAbortable abortable;
     private Stoppable stopped;
     private RegionCoprocessorEnvironment env;
+    private PMetricRegistry rsMetricRegistry;
 
     @Override
     public void setup(IndexWriter parent, RegionCoprocessorEnvironment env, String name) {
         this.env = env;
         Configuration conf = env.getConfiguration();
+        rsMetricRegistry = PMetricRegistry.Factory.create(env);
         setup(IndexWriterUtils.getDefaultDelegateHTableFactory(env),
                 ThreadPoolManager.getExecutor(
                         new ThreadPoolBuilder(name, conf).setMaxThread(NUM_CONCURRENT_INDEX_WRITER_THREADS_CONF_KEY,
@@ -145,6 +152,7 @@ public class TrackingParallelWriterIndexCommitter implements IndexCommitter {
                 @SuppressWarnings("deprecation")
                 @Override
                 public Boolean call() throws Exception {
+                    long start = System.nanoTime();
                     HTableInterface table = null;
                     try {
                         // this may have been queued, but there was an abort/stop so we try to early exit
@@ -156,6 +164,9 @@ public class TrackingParallelWriterIndexCommitter implements IndexCommitter {
                             try {
                                 throwFailureIfDone();
                                 IndexUtil.writeLocalUpdates(env.getRegion(), mutations, true);
+                                rsMetricRegistry.updateTimer(tableReference +
+                                    SINGLE_INDEX_UPDATE_WRITE_TIME_SUFFIX,
+                                    System.nanoTime() - start, TimeUnit.NANOSECONDS);
                                 return Boolean.TRUE;
                             } catch (IOException ignord) {
                                 // when it's failed we fall back to the standard & slow way
@@ -184,6 +195,8 @@ public class TrackingParallelWriterIndexCommitter implements IndexCommitter {
                             table.close();
                         }
                     }
+                    rsMetricRegistry.updateTimer(tableReference + SINGLE_INDEX_UPDATE_WRITE_TIME_SUFFIX ,
+                        System.nanoTime() - start, TimeUnit.NANOSECONDS);
                     return Boolean.TRUE;
                 }
 
@@ -214,7 +227,9 @@ public class TrackingParallelWriterIndexCommitter implements IndexCommitter {
             // there was a failure
             if (result == null) {
                 // we know which table failed by the index of the result
-                failures.add(tables.get(index));
+                HTableInterfaceReference tableRef = tables.get(index);
+                failures.add(tableRef);
+                rsMetricRegistry.incrementCounter(tableRef + SINGLE_INDEX_WRITE_FAILURES_SUFFIX, 1);
             }
             index++;
         }
