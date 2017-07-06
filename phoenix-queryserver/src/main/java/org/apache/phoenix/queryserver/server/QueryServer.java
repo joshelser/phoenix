@@ -182,10 +182,11 @@ public final class QueryServer extends Configured implements Tool, Runnable {
           QueryServices.QUERY_SERVER_HBASE_SECURITY_CONF_ATTRIB));
       final boolean disableSpnego = getConf().getBoolean(QueryServices.QUERY_SERVER_SPNEGO_AUTH_DISABLED_ATTRIB,
               QueryServicesOptions.DEFAULT_QUERY_SERVER_SPNEGO_AUTH_DISABLED);
-
+      final boolean disableLogin = getConf().getBoolean(QueryServices.QUERY_SERVER_DISABLE_KERBEROS_LOGIN,
+              QueryServicesOptions.DEFAULT_QUERY_SERVER_DISABLE_KERBEROS_LOGIN);
 
       // handle secure cluster credentials
-      if (isKerberos && !disableSpnego) {
+      if (isKerberos && !disableSpnego && !disableLogin) {
         String hostname = Strings.domainNamePointerToHostName(DNS.getDefaultHost(
             getConf().get(QueryServices.QUERY_SERVER_DNS_INTERFACE_ATTRIB, "default"),
             getConf().get(QueryServices.QUERY_SERVER_DNS_NAMESERVER_ATTRIB, "default")));
@@ -217,7 +218,12 @@ public final class QueryServer extends Configured implements Tool, Runnable {
 
       // Enable SPNEGO and Impersonation when using Kerberos
       if (isKerberos) {
-        UserGroupInformation ugi = UserGroupInformation.getLoginUser();
+        UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
+        LOG.debug("Current user is " + ugi);
+        if (!ugi.hasKerberosCredentials()) {
+          ugi = UserGroupInformation.getLoginUser();
+          LOG.debug("Current user does not have Kerberos credentials, using instead " + ugi);
+        }
 
         // Make sure the proxyuser configuration is up to date
         ProxyUsers.refreshSuperUserGroupsConfiguration(getConf());
@@ -250,6 +256,10 @@ public final class QueryServer extends Configured implements Tool, Runnable {
       this.t = t;
       return -1;
     }
+  }
+
+  public synchronized void stop() {
+    server.stop();
   }
 
   /**
