@@ -230,6 +230,43 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>jdk8</id>
+      <activation>
+        <jdk>[1.8,1.9)</jdk>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>net.revelc.code</groupId>
+            <artifactId>warbucks-maven-plugin</artifactId>
+            <configuration>
+              <rules>
+                <rule>
+                  <includeMainClasses>false</includeMainClasses>
+                  <includeTestClasses>true</includeTestClasses>
+                  <!-- a pattern of class names for which to check annotations -->
+                  <classPattern>.*IT</classPattern>
+                  <!-- a pattern of annotations which are required for the specified classes -->
+                  <classAnnotationPattern>org[.]junit[.]experimental[.]categories[.]Category</classAnnotationPattern>
+                </rule>
+              </rules>
+            </configuration>
+            <executions>
+              <execution>
+                <id>run-warbucks</id>
+                <phase>pre-integration-test</phase>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 
   <dependencies>
     <!-- Transaction dependencies -->
