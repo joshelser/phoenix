@@ -20,6 +20,7 @@ package org.apache.phoenix.coprocessor;
 import static org.apache.phoenix.schema.types.PDataType.TRUE_BYTES;
 
 import java.io.IOException;
+import java.security.PrivilegedExceptionAction;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,6 +54,7 @@ import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.regionserver.RegionScanner;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.log4j.Level;
@@ -160,9 +162,17 @@ public class MetaDataRegionObserver extends BaseRegionObserver {
                             SchemaUtil.getPhysicalName(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME_BYTES, props));
                     statsTable = env.getTable(
                             SchemaUtil.getPhysicalName(PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES, props));
-                    if (UpgradeUtil.truncateStats(metaTable, statsTable)) {
-                        LOG.info("Stats are successfully truncated for upgrade 4.7!!");
-                    }
+                    final HTableInterface mTable=metaTable;
+                    final HTableInterface sTable=statsTable;
+                    User.runAsLoginUser(new PrivilegedExceptionAction<Void>() {
+                        @Override
+                        public Void run() throws Exception {
+                            if (UpgradeUtil.truncateStats(mTable, sTable)) {
+                                LOG.info("Stats are successfully truncated for upgrade 4.7!!");
+                            }
+                            return null;
+                        }
+                    });
                 } catch (Exception exception) {
                     LOG.warn("Exception while truncate stats..,"
                             + " please check and delete stats manually inorder to get proper result with old client!!");
@@ -534,14 +544,19 @@ public class MetaDataRegionObserver extends BaseRegionObserver {
     }
     
 	private static boolean updateDisableTimestamp(PhoenixConnection conn, String indexTableName,
-	        long disabledTimestamp, HTableInterface metaTable, long expectedDisabledTimestamp) throws IOException {
-		byte[] indexTableKey = SchemaUtil.getTableKeyFromFullName(indexTableName);
-		Put put = new Put(indexTableKey);
+	        long disabledTimestamp, final HTableInterface metaTable, final long expectedDisabledTimestamp) throws IOException {
+		final byte[] indexTableKey = SchemaUtil.getTableKeyFromFullName(indexTableName);
+		final Put put = new Put(indexTableKey);
 		put.addColumn(PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES, PhoenixDatabaseMetaData.INDEX_DISABLE_TIMESTAMP_BYTES,
 				PLong.INSTANCE.toBytes(disabledTimestamp));
-		return metaTable.checkAndPut(indexTableKey, PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES,
-				PhoenixDatabaseMetaData.INDEX_DISABLE_TIMESTAMP_BYTES, CompareOp.EQUAL, PLong.INSTANCE.toBytes(expectedDisabledTimestamp),
-				put);
+        return User.runAsLoginUser(new PrivilegedExceptionAction<Boolean>() {
+            @Override
+            public Boolean run() throws Exception {
+                return metaTable.checkAndPut(indexTableKey, PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES,
+                        PhoenixDatabaseMetaData.INDEX_DISABLE_TIMESTAMP_BYTES, CompareOp.EQUAL,
+                        PLong.INSTANCE.toBytes(expectedDisabledTimestamp), put);
+            }
+        });
 	}
 
     @VisibleForTesting

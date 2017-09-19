@@ -227,6 +227,16 @@ public class MetaDataUtil {
         return null;
     }
     
+    public static boolean isNameSpaceMapped(List<Mutation> tableMetaData, KeyValueBuilder builder,
+            ImmutableBytesWritable value) {
+              if (getMutationValue(getPutOnlyTableHeaderRow(tableMetaData),
+                  PhoenixDatabaseMetaData.IS_NAMESPACE_MAPPED_BYTES, builder, value)) {
+                  return (boolean)PBoolean.INSTANCE.toObject(ByteUtil.copyKeyBytesIfNecessary(value));
+              }
+              return false;
+          }
+          
+    
     public static long getParentSequenceNumber(List<Mutation> tableMetaData) {
         return getSequenceNumber(getParentTableHeaderRow(tableMetaData));
     }

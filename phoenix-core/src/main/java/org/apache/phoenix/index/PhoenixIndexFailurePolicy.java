@@ -18,6 +18,7 @@
 package org.apache.phoenix.index;
 
 import java.io.IOException;
+import java.security.PrivilegedExceptionAction;
 import java.sql.SQLException;
 import java.util.Collection;
 import java.util.Collections;
@@ -39,6 +40,7 @@ import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MetaDataMutationResult;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MutationCode;
@@ -160,12 +162,12 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
     }
 
     private long handleFailureWithExceptions(Multimap<HTableInterfaceReference, Mutation> attempted,
-            Exception cause) throws Throwable {
+            final Exception cause) throws Throwable {
         Set<HTableInterfaceReference> refs = attempted.asMap().keySet();
-        Map<String, Long> indexTableNames = new HashMap<String, Long>(refs.size());
+        final Map<String, Long> indexTableNames = new HashMap<String, Long>(refs.size());
         // start by looking at all the tables to which we attempted to write
         long timestamp = 0;
-        boolean leaveIndexActive = blockDataTableWritesOnFailure || !disableIndexOnFailure;
+        final boolean leaveIndexActive = blockDataTableWritesOnFailure || !disableIndexOnFailure;
         for (HTableInterfaceReference ref : refs) {
             long minTimeStamp = 0;
 
@@ -201,8 +203,11 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
             return timestamp;
         }
 
-        PIndexState newState = disableIndexOnFailure ? PIndexState.DISABLE : PIndexState.ACTIVE;
+        final PIndexState newState = disableIndexOnFailure ? PIndexState.DISABLE : PIndexState.ACTIVE;
         // for all the index tables that we've found, try to disable them and if that fails, try to
+        User.runAsLoginUser(new PrivilegedExceptionAction<Void>() {
+            @Override
+            public Void run() throws Exception {
         for (Map.Entry<String, Long> tableTimeElement :indexTableNames.entrySet()){
             String indexTableName = tableTimeElement.getKey();
             long minTimeStamp = tableTimeElement.getValue();
@@ -217,6 +222,7 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
                 minTimeStamp *= -1;
             }
             // Disable the index by using the updateIndexState method of MetaDataProtocol end point coprocessor.
+            
             try (HTableInterface systemTable = env.getTable(SchemaUtil
                     .getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME_BYTES, env.getConfiguration()))) {
                 MetaDataMutationResult result = IndexUtil.updateIndexState(indexTableName, minTimeStamp,
@@ -246,8 +252,13 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
                 else
                     LOG.info("Successfully disabled index " + indexTableName + " due to an exception while writing updates.",
                             cause);
+            } catch (Throwable e) {
+                new Exception(e);
             }
+            
+                
         }
+        return null;}});
         // Return the cell time stamp (note they should all be the same)
         return timestamp;
     }

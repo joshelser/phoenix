@@ -2486,8 +2486,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         try {
             final TableName mutexTableName = TableName.valueOf(
                 PhoenixDatabaseMetaData.SYSTEM_MUTEX_NAME_BYTES);
-            List<TableName> systemTables = getSystemTableNames(admin);
-            if (systemTables.contains(mutexTableName)) {
+            if (admin.tableExists(mutexTableName)) {
                 logger.debug("System mutex table already appears to exist, not creating it");
                 return;
             }

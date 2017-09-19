@@ -289,6 +289,7 @@ public interface QueryServices extends SQLCloseable {
 
     //Update Cache Frequency default config attribute
     public static final String DEFAULT_UPDATE_CACHE_FREQUENCY_ATRRIB  = "phoenix.default.update.cache.frequency";
+    public static final String PHOENIX_ACLS_ENABLED = "phoenix.acls.enabled";
 
     /**
      * Get executor service used for parallel scans
