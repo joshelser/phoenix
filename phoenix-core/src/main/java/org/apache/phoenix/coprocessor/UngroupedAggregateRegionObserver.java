@@ -956,7 +956,9 @@ public class UngroupedAggregateRegionObserver extends BaseScannerRegionObserver 
                 @Override
                 public Void run() throws Exception {
                     String fullTableName = c.getEnvironment().getRegion().getRegionInfo().getTable().getNameAsString();
-                    clearTsOnDisabledIndexes(fullTableName);
+                    if (!SchemaUtil.isSystemTable(Bytes.toBytes(fullTableName))) {
+                      clearTsOnDisabledIndexes(fullTableName);
+                    }
                     return null;
                 }
             });
