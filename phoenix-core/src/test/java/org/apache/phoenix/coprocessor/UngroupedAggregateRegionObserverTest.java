@@ -27,6 +27,7 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -36,7 +37,9 @@ import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.regionserver.StoreFile;
+import org.apache.hadoop.hbase.regionserver.compactions.CompactionLifeCycleTracker;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
+import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequestImpl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.util.SchemaUtil;
@@ -53,7 +56,8 @@ public class UngroupedAggregateRegionObserverTest {
             .when(obs).clearTsOnDisabledIndexes(anyString());
         // Call the real postCompact method
         doCallRealMethod().when(obs).postCompact(any(ObserverContext.class), any(Store.class),
-            any(StoreFile.class), any(CompactionRequest.class));
+            any(StoreFile.class), any(CompactionLifeCycleTracker.class),
+            any(CompactionRequest.class));
 
         // Make sure that calls to normal tables still go through this method
         try {
@@ -93,9 +97,9 @@ public class UngroupedAggregateRegionObserverTest {
         when(environment.getRegion()).thenReturn(region);
         when(region.getRegionInfo()).thenReturn(regionInfo);
 
-        CompactionRequest req = new CompactionRequest();
+        CompactionRequestImpl req = new CompactionRequestImpl(Collections.emptyList());
         req.setIsMajor(false, true);
 
-        obs.postCompact(context, null, null, req);
+        obs.postCompact(context, null, null, null, req);
     }
 }
