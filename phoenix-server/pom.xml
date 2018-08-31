@@ -122,24 +122,26 @@
                 </transformers>
                 <artifactSet>
                 <includes>
-                  <include>org.apache.phoenix:phoenix-core</include>
-                  <include>org.iq80.snappy:snappy</include>
-                  <include>org.antlr:antlr*</include>
-                  <include>joda-time:joda-time</include>
-                  <include>org.apache.tephra:tephra*</include>
-                  <include>com.google.code.gson:gson</include>
-                  <include>org.jruby.joni:joni</include>
-                  <include>org.jruby.jcodings:jcodings</include>
-                  <include>org.apache.twill:twill*</include>
-                  <include>com.google.inject.extensions:guice-assistedinject</include>
-                  <include>it.unimi.dsi:fastutil</include>
-                  <include>io.dropwizard.metrics:metrics-core</include>
-                  <include>org.apache.thrift:libthrift</include>
                   <include>com.clearspring.analytics:stream</include>
-                  <include>com.salesforce.i18n:i18n-util</include>
-                  <include>com.ibm.icu:icu4j</include>
+                  <include>com.google.code.gson:gson</include>
+                  <include>com.google.guava:guava</include>
+                  <include>com.google.protobuf:protobuf-java</include>
+                  <include>com.google.inject.extensions:guice-assistedinject</include>
                   <include>com.ibm.icu:icu4j-charset</include>
                   <include>com.ibm.icu:icu4j-localespi</include>
+                  <include>com.ibm.icu:icu4j</include>
+                  <include>com.salesforce.i18n:i18n-util</include>
+                  <include>io.dropwizard.metrics:metrics-core</include>
+                  <include>it.unimi.dsi:fastutil</include>
+                  <include>joda-time:joda-time</include>
+                  <include>org.antlr:antlr*</include>
+                  <include>org.apache.phoenix:phoenix-core</include>
+                  <include>org.apache.tephra:tephra*</include>
+                  <include>org.apache.thrift:libthrift</include>
+                  <include>org.apache.twill:twill*</include>
+                  <include>org.iq80.snappy:snappy</include>
+                  <include>org.jruby.jcodings:jcodings</include>
+                  <include>org.jruby.joni:joni</include>
                 </includes>
                   <excludes>
                     <exclude>org.apache.phoenix:phoenix-server</exclude>
@@ -162,6 +164,81 @@
                 <relocation>
                   <pattern>org.joda</pattern>
                   <shadedPattern>${shaded.package}.org.joda</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.apache.commons</pattern>
+                  <shadedPattern>${shaded.package}.org.apache.commons</shadedPattern>
+                  <excludes>
+                    <exclude>org.apache.commons.csv.**</exclude>
+                    <exclude>org.apache.commons.logging.**</exclude>
+                    <exclude>org.apache.commons.configuration.**</exclude>
+                    <exclude>org.apache.commons.configuration2.**</exclude>
+                  </excludes>
+                </relocation>
+                <relocation>
+                  <pattern>org.antlr</pattern>
+                  <shadedPattern>${shaded.package}.org.antlr</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.iq80</pattern>
+                  <shadedPattern>${shaded.package}.org.iq80</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.jcodings</pattern>
+                  <shadedPattern>${shaded.package}.org.jcodings</shadedPattern>
+                </relocation>
+                <!-- Tephra and dependencies -->
+                <relocation>
+                  <pattern>org.apache.tephra</pattern>
+                  <shadedPattern>${shaded.package}.org.apache.tephra</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.apache.twill</pattern>
+                  <shadedPattern>${shaded.package}.org.apache.twill</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.apache.thrift</pattern>
+                  <shadedPattern>${shaded.package}.org.apache.thrift</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.google</pattern>
+                  <shadedPattern>${shaded.package}.com.google</shadedPattern>
+                  <excludes>
+                    <!-- Phoenix provides CP Endpoints and HBase requires those to use protobuf in the normal package -->
+                    <exclude>com.google.protobuf.**</exclude>
+                  </excludes>
+                </relocation>
+                <relocation>
+                  <pattern>com.codahale.metrics</pattern>
+                  <shadedPattern>${shaded.package}.com.codahale.metrics</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>it.unimi.dsi.fastutil</pattern>
+                  <shadedPattern>${shaded.package}.it.unimi.dsi.fastutil</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.ibm.icu</pattern>
+                  <shadedPattern>${shaded.package}.com.ibm.icu</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.force</pattern>
+                  <shadedPattern>${shaded.package}.com.force</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.clearspring</pattern>
+                  <shadedPattern>${shaded.package}.com.clearspring</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.joni</pattern>
+                  <shadedPattern>${shaded.package}.org.joni</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.jcodings</pattern>
+                  <shadedPattern>${shaded.package}.org.jcodings</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.iq80.snappy</pattern>
+                  <shadedPattern>${shaded.package}.org.iq80.snappy</shadedPattern>
                 </relocation>
              </relocations>
             </configuration>
