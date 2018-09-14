@@ -38,7 +38,7 @@ set -u
 echo "INSTALLING COMPONENTS"
 #pip install -e file:///${LOCAL_PY}/requests-kerberos
 pip install requests-gssapi
-pip install -e file:///${LOCAL_PY}/phoenixdb-module
+pip install -e file:///${LOCAL_PY}
 
 export KRB5_CONFIG=$KRB5_CFG_FILE
 cat $KRB5_CONFIG
